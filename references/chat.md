@@ -1,6 +1,6 @@
 # Chat Reference
 
-> All agent-facing operations use `tada <subcommand> [args…]` (PATH-resident). Two scripts that cannot live on PATH (`ride-relay.js`, `install.js`) are invoked via `node ${SKILL_DIR}/scripts/<name>.js` — see `../SKILL.md` for the path convention.
+> All agent-facing operations use `amb <subcommand> [args…]` (PATH-resident). Two scripts that cannot live on PATH (`ride-relay.js`, `install.js`) are invoked via `node ${SKILL_DIR}/scripts/<name>.js` — see `../SKILL.md` for the path convention.
 
 Driver chat during a ride.
 
@@ -20,10 +20,10 @@ Code the agent reads them from the drained stdout (see SKILL.md
 
 ## Sending messages
 
-Send to the driver with `tada chat-send-message`. There is no named pipe; send directly:
+Send to the driver with `amb chat-send-message`. There is no named pipe; send directly:
 
 ```bash
-tada chat-send-message <request_id> <content>
+amb chat-send-message <request_id> <content>
 ```
 
 ## Fallback commands
@@ -33,7 +33,7 @@ Use these only when `ride-relay.js` is NOT running (ad-hoc, one-shot operations)
 ### chat-get-messages
 
 ```bash
-tada chat-get-messages <request_id> [cursor]
+amb chat-get-messages <request_id> [cursor]
 ```
 
 - `cursor`: `createdAt` of last message for pagination
@@ -42,7 +42,7 @@ tada chat-get-messages <request_id> [cursor]
 ### chat-send-image
 
 ```bash
-tada chat-send-image <request_id> <image_path>
+amb chat-send-image <request_id> <image_path>
 ```
 
 Sends image via REST. Supported: jpeg, jpg, png, gif, webp. Max 10MB.

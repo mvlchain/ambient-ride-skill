@@ -2,7 +2,7 @@
 
 // src/scripts/ride-relay.ts
 import path8 from "path";
-import fs6 from "fs";
+import fs7 from "fs";
 
 // src/lib/core/state-paths.ts
 import os from "os";
@@ -12,7 +12,35 @@ function resolveDir(raw) {
   return path.resolve(raw);
 }
 function stateRoot() {
-  return resolveDir(process.env["TADA_AGENT_STATE_DIR"] ?? path.join(os.homedir(), ".tada"));
+  return resolveDir(process.env["AMB_RIDE_STATE_DIR"] ?? path.join(os.homedir(), ".amb"));
+}
+
+// src/lib/core/runtime-env.ts
+var SCALAR_KEYS = {
+  AMB_RIDE_STATE_DIR: "stateDir",
+  AMB_RIDE_PASSPHRASE: "passphrase",
+  AMB_RIDE_LOG_LEVEL: "logLevel",
+  AMB_RIDE_OPENCLAW_CLI: "openclawCli"
+};
+var RPC_KEY = /^AMB_RIDE_RPC_URL_([A-Z0-9_]+)$/;
+var NETWORK_NAME = /^[A-Z0-9]+(?:_[A-Z0-9]+)*$/;
+function readRuntimeEnv(env = process.env) {
+  const result = { rpcUrls: {} };
+  for (const [key, value] of Object.entries(env)) {
+    if (!key.startsWith("AMB_RIDE_")) continue;
+    const scalar = SCALAR_KEYS[key];
+    if (scalar !== void 0) {
+      if (value !== void 0) result[scalar] = value;
+      continue;
+    }
+    const rpc = RPC_KEY.exec(key);
+    if (rpc && NETWORK_NAME.test(rpc[1])) {
+      if (value !== void 0) result.rpcUrls[rpc[1]] = value;
+      continue;
+    }
+    throw new Error(`Unknown Ambient Ride runtime environment variable: ${key}`);
+  }
+  return result;
 }
 
 // src/lib/core/run-lock.ts
@@ -42,6 +70,7 @@ function isHeldAlive(root, name) {
   return pid !== null && alive(pid);
 }
 function acquire(root, name) {
+  if (fs.existsSync(`${root}.amb-migration-quiesced`)) return false;
   const p = pidFile(root, name);
   fs.mkdirSync(path2.dirname(p), { recursive: true });
   try {
@@ -301,6 +330,13 @@ var defaultSessionResolveRetry = {
   timeoutMs: TRANSCRIPT_FLUSH_WAIT_MS,
   pollMs: SESSION_LIST_POLL_MS
 };
+var SINGLE_SHOT_SESSION_RETRY = {
+  now: Date.now,
+  wait: () => {
+  },
+  timeoutMs: 0,
+  pollMs: 0
+};
 function listOpenclawSessions(cli, agentId, activeMinutes, run) {
   const base = ["--json", "--agent", agentId, "--active", String(activeMinutes)];
   const argForms = [["sessions", ...base], ["sessions", "list", ...base]];
@@ -346,6 +382,26 @@ function defaultTranscriptHasRideId(storePath, sessionId, rideId) {
     }
   }
 }
+function readChannelContextTarget(env) {
+  const raw = env?.["OPENCLAW_CHANNEL_CONTEXT"];
+  if (!raw) return void 0;
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return void 0;
+  }
+  const pick = (v) => {
+    if (typeof v === "string") {
+      const t = v.trim();
+      return t.length ? t : void 0;
+    }
+    if (typeof v === "number" && Number.isFinite(v)) return String(v);
+    return void 0;
+  };
+  const obj = parsed && typeof parsed === "object" ? parsed : void 0;
+  return pick(obj?.["chat"]?.["id"]);
+}
 var TARGET_CHANNELS = /* @__PURE__ */ new Set(["telegram"]);
 function parseSessionChannelTarget(key) {
   if (!key) return null;
@@ -359,6 +415,36 @@ function resolveOpenclawSession(input) {
   const passed = input.passedSessionId;
   if (passed && !passed.startsWith("agent:")) {
     return { sessionId: passed, key: void 0, source: "explicit-session-id" };
+  }
+  {
+    const listRun = input.run ?? defaultRunForSessions;
+    const listActiveMinutes = input.activeMinutes ?? DEFAULT_ACTIVE_MINUTES;
+    const envTarget = readChannelContextTarget(input.env);
+    if (envTarget) {
+      let listed;
+      try {
+        listed = listOpenclawSessions(input.cli, input.agentId, listActiveMinutes, listRun);
+      } catch {
+        listed = void 0;
+      }
+      if (listed) {
+        const listedWithId = (Array.isArray(listed.sessions) ? listed.sessions : []).filter(
+          (s) => typeof s?.sessionId === "string" && s.sessionId.length > 0
+        );
+        const matches = listedWithId.filter((s) => {
+          const parsed = parseSessionChannelTarget(s.key);
+          return parsed !== null && parsed.target === envTarget;
+        });
+        if (matches.length > 1) {
+          throw new Error(
+            `OPENCLAW_RELAY_SESSION_AMBIGUOUS: channel target matched ${matches.length} active sessions for agent ${input.agentId}`
+          );
+        }
+        if (matches.length === 1) {
+          return { sessionId: matches[0].sessionId, key: matches[0].key, source: "channel-env" };
+        }
+      }
+    }
   }
   const sessionKey = input.sessionKey ?? (passed?.startsWith("agent:") ? passed : void 0);
   const run = input.run ?? defaultRunForSessions;
@@ -473,8 +559,34 @@ function resolveOpenclawSession(input) {
   return { sessionId: keyMatches[0].sessionId, key: keyMatches[0].key, source: "session-key" };
 }
 
-// src/scripts/_internal/relay-trace.ts
+// src/scripts/_internal/resolve-fail-log.ts
 import fs2 from "fs";
+function makeResolveFailLogger(errorLogPath, opts) {
+  const throttleMs = opts?.throttleMs ?? 3e4;
+  const now = opts?.now ?? Date.now;
+  let count = 0;
+  let lastStderrAt = 0;
+  return (e) => {
+    count += 1;
+    const t = now();
+    if (count === 1 || t - lastStderrAt >= throttleMs) {
+      lastStderrAt = t;
+      process.stderr.write(JSON.stringify({
+        error: "OPENCLAW_RELAY_SESSION_UNRESOLVED",
+        message: e.message,
+        attempts: count
+      }) + "\n");
+    }
+    try {
+      fs2.appendFileSync(errorLogPath, `[${(/* @__PURE__ */ new Date()).toISOString()}] resolve: ${e.message}
+`);
+    } catch {
+    }
+  };
+}
+
+// src/scripts/_internal/relay-trace.ts
+import fs3 from "fs";
 import path4 from "path";
 function relayTracePath(root, rideId) {
   return path4.join(root, "run", `relay-trace-${rideId}.jsonl`);
@@ -483,8 +595,8 @@ function makeRelayTrace(root, rideId) {
   const file = relayTracePath(root, rideId);
   return (rec) => {
     try {
-      fs2.mkdirSync(path4.dirname(file), { recursive: true });
-      fs2.appendFileSync(file, JSON.stringify(rec) + "\n");
+      fs3.mkdirSync(path4.dirname(file), { recursive: true });
+      fs3.appendFileSync(file, JSON.stringify(rec) + "\n");
     } catch {
     }
   };
@@ -623,12 +735,10 @@ Track live: ${shareUrl}` : line;
   }
   if (ev.terminal) {
     if (status === "FINISHED") {
+      const completion = statusMessage ? ensurePeriod(sentenceCase(statusMessage)) : "Ride completed.";
       const tip = ev.payload["tip"];
-      let line = `\u2705 ${statusMessage ? ensurePeriod(sentenceCase(statusMessage)) : "Ride completed."}`;
-      if (tip) {
-        line += ` Tips from ${formatTipAmount(tip.minAmount, tip.currency)} are welcome \u2014 just tell me if you'd like to add one.`;
-      }
-      return line;
+      const tipInvitation = tip ? ` Tips from ${formatTipAmount(tip.minAmount, tip.currency)} are welcome \u2014 just tell me if you'd like to add one.` : "";
+      return `\u2705 ${completion}${tipInvitation} If you'd like your receipt, just ask.`;
     }
     const phrase2 = ensurePeriod(sentenceCase(phraseFor(status, statusMessage)));
     return RETRYABLE.has(status) ? `\u26A0\uFE0F ${phrase2} Say "call again" to retry.` : `\u26A0\uFE0F ${phrase2}`;
@@ -671,13 +781,17 @@ function renderPrompt(ev) {
     return `${brand} ride: driver sent "${c}". Tell the user briefly; their next short reply may be for the driver. No unrelated questions.`;
   }
   const statusMessage = ev.payload["statusMessage"];
-  const phrase = phraseFor(String(ev.payload["status"] ?? ""), statusMessage);
+  const status = String(ev.payload["status"] ?? "");
+  const phrase = phraseFor(status, statusMessage);
   if (ev.terminal) {
     const tip = ev.payload["tip"];
     let line = `${brand} ride ${ev.rideId} ${phrase}. Tell the user the final outcome briefly.`;
+    if (status === "FINISHED") {
+      line += " Ask whether they would like to see their receipt. Fetch it only if they explicitly ask.";
+    }
     if (tip) {
       const range = tip.maxAmount ? `from ${formatTipAmount(tip.minAmount, tip.currency)} up to ${formatTipAmount(tip.maxAmount, tip.currency)}` : `from ${formatTipAmount(tip.minAmount, tip.currency)}`;
-      line += ` Tips ${range} are welcome \u2014 ask the user if they'd like to add one, and how much.`;
+      line += ` Tips ${range} are welcome. You may offer the tip together with that receipt question.`;
     }
     return line;
   }
@@ -784,17 +898,17 @@ function makeTracedLegacyDeliver(legacy, trace, now) {
 // src/scripts/_internal/relay-loop.ts
 import { spawn as nodeSpawn } from "child_process";
 import path5 from "path";
-import fs3 from "fs";
+import fs4 from "fs";
 function writeCursorAtomic(file, seq) {
-  fs3.mkdirSync(path5.dirname(file), { recursive: true });
+  fs4.mkdirSync(path5.dirname(file), { recursive: true });
   const tmp = `${file}.tmp.${process.pid}`;
-  fs3.writeFileSync(tmp, String(seq));
-  fs3.renameSync(tmp, file);
+  fs4.writeFileSync(tmp, String(seq));
+  fs4.renameSync(tmp, file);
 }
 function runRelayLoop(o) {
   const spawn = o.spawn ?? nodeSpawn;
-  const tadaCmd = o.tadaCmd ?? "tada";
-  const child = spawn(tadaCmd, [
+  const ambCmd = o.ambCmd ?? "amb";
+  const child = spawn(ambCmd, [
     "events",
     "--ride",
     o.rideId,
@@ -874,7 +988,7 @@ function runRelayLoop(o) {
 }
 
 // src/scripts/_internal/relay-guards.ts
-import fs4 from "fs";
+import fs5 from "fs";
 
 // src/lib/events/event-paths.ts
 import path6 from "path";
@@ -891,7 +1005,7 @@ function defaultMonitorAlive(root, rideId) {
 }
 function defaultLastEventAt(root, rideId) {
   try {
-    return fs4.statSync(logPath(root, rideId)).mtimeMs;
+    return fs5.statSync(logPath(root, rideId)).mtimeMs;
   } catch {
     return null;
   }
@@ -939,7 +1053,7 @@ function startRelayGuards(o) {
 
 // src/scripts/_internal/self-detach.ts
 import { spawn as nodeSpawn2 } from "child_process";
-import fs5 from "fs";
+import fs6 from "fs";
 import path7 from "path";
 var DETACH_MARKER = "TADA_RELAY_DETACHED";
 var NO_DETACH_ENV = "TADA_RELAY_NO_DETACH";
@@ -958,8 +1072,8 @@ function detachSelf(rideId, deps = {}) {
   const warn = deps.stderr ?? ((s) => process.stderr.write(s));
   const logPath2 = path7.join(root, "run", `relay-${rideId}.log`);
   try {
-    fs5.mkdirSync(path7.dirname(logPath2), { recursive: true });
-    const fd = fs5.openSync(logPath2, "a");
+    fs6.mkdirSync(path7.dirname(logPath2), { recursive: true });
+    const fd = fs6.openSync(logPath2, "a");
     try {
       const child = spawn(execPath, argv, {
         detached: true,
@@ -976,7 +1090,7 @@ function detachSelf(rideId, deps = {}) {
       }) + "\n");
       return pid;
     } finally {
-      fs5.closeSync(fd);
+      fs6.closeSync(fd);
     }
   } catch (e) {
     warn(JSON.stringify({
@@ -987,6 +1101,19 @@ function detachSelf(rideId, deps = {}) {
   }
 }
 
+// src/lib/core/main-module.ts
+import { realpathSync as realpathSync2 } from "fs";
+import { pathToFileURL } from "url";
+function isMainModule(importMetaUrl) {
+  const entry = process.argv[1];
+  if (!entry) return false;
+  try {
+    return importMetaUrl === pathToFileURL(realpathSync2(entry)).href;
+  } catch {
+    return false;
+  }
+}
+
 // src/scripts/ride-relay.ts
 var DEFAULT_BACKOFF_MS = 500;
 var DRAIN_CAP_MS = 6e5;
@@ -994,7 +1121,7 @@ async function runRideRelay(rideId, deps) {
   const kind = selectDeliver();
   if (kind === "stdout") {
     const cursorFile2 = path8.join(stateRoot(), "cursors", `stdout-${rideId}`);
-    fs6.mkdirSync(path8.dirname(cursorFile2), { recursive: true });
+    fs7.mkdirSync(path8.dirname(cursorFile2), { recursive: true });
     const r = await deps.runRelayLoop({ rideId, cursorFile: cursorFile2, deliver: deliverStdout, oneShot: deps.oneShot });
     return r.exitCode;
   }
@@ -1011,7 +1138,8 @@ async function runRideRelay(rideId, deps) {
     }) + "\n");
     return 1;
   }
-  const cli = deps.resolveOpenclawCli(process.env["TADA_OPENCLAW_CLI"]);
+  const cli = deps.resolveOpenclawCli(readRuntimeEnv().openclawCli);
+  const makeOpenclawDeliver2 = deps.makeOpenclawDeliver;
   const resolveAgent = deps.resolveOpenclawAgent ?? resolveOpenclawAgent;
   let agentId;
   try {
@@ -1033,97 +1161,89 @@ async function runRideRelay(rideId, deps) {
     return 1;
   }
   const resolveSession = deps.resolveOpenclawSession ?? resolveOpenclawSession;
-  let sessionId;
-  let sessionKeyResolved;
-  try {
-    const resolved = resolveSession({
+  const errorLogPath = path8.join(stateRoot(), "run", `relay-error-${rideId}.log`);
+  fs7.mkdirSync(path8.dirname(errorLogPath), { recursive: true });
+  const resolveFailLog = makeResolveFailLogger(errorLogPath);
+  let pipeline;
+  function buildPipeline(resolved) {
+    const channelTarget = parseSessionChannelTarget(resolved.key);
+    const trace = makeRelayTrace(stateRoot(), rideId);
+    const detectChannel = deps.detectChannelEnabled ?? detectChannelEnabled;
+    const hasChannel = detectChannel(cli);
+    const baseDeliver = makeOpenclawDeliver2({
       cli,
       agentId,
-      rideId,
-      passedSessionId: deps.sessionId,
-      sessionKey: deps.sessionKey
+      sessionId: resolved.sessionId,
+      hasChannel
     });
-    sessionId = resolved.sessionId;
-    sessionKeyResolved = resolved.key;
-    if (resolved.source === "transcript" && resolved.diagnostics && resolved.diagnostics.attempts > 1) {
-      process.stderr.write(JSON.stringify({
-        note: "OPENCLAW_RELAY_SESSION_RESOLVED_AFTER_RETRY",
-        ...resolved.diagnostics
-      }) + "\n");
-    }
-    if (resolved.correctedSessionKeyFrom) {
-      process.stderr.write(JSON.stringify({
-        note: "OPENCLAW_RELAY_SESSION_KEY_CORRECTED",
-        passed_session_key: "[redacted]",
-        resolved_session_key: sessionKeyResolved,
-        source: resolved.source
-      }) + "\n");
-    }
-  } catch (e) {
-    process.stderr.write(JSON.stringify({
-      error: "OPENCLAW_RELAY_SESSION_UNRESOLVED",
-      message: e.message
-    }) + "\n");
-    return 1;
-  }
-  const channelTarget = parseSessionChannelTarget(sessionKeyResolved);
-  const trace = makeRelayTrace(stateRoot(), rideId);
-  const detectChannel = deps.detectChannelEnabled ?? detectChannelEnabled;
-  const hasChannel = detectChannel(cli);
-  const baseDeliver = deps.makeOpenclawDeliver({
-    cli,
-    agentId,
-    sessionId,
-    hasChannel
-  });
-  const errorLogPath = path8.join(stateRoot(), "run", `relay-error-${rideId}.log`);
-  fs6.mkdirSync(path8.dirname(errorLogPath), { recursive: true });
-  const withErrorLog = (inner) => async (ev) => {
-    try {
-      await inner(ev);
-    } catch (e) {
+    const withErrorLog = (inner) => async (ev) => {
       try {
-        fs6.appendFileSync(
-          errorLogPath,
-          `[${(/* @__PURE__ */ new Date()).toISOString()}] ${e.message}
+        await inner(ev);
+      } catch (e) {
+        try {
+          fs7.appendFileSync(
+            errorLogPath,
+            `[${(/* @__PURE__ */ new Date()).toISOString()}] ${e.message}
 
 `
-        );
-      } catch {
+          );
+        } catch {
+        }
+        throw e;
       }
-      throw e;
+    };
+    let injectQueue;
+    let deliver2;
+    if (channelTarget === null) {
+      deliver2 = withErrorLog(makeTracedLegacyDeliver(baseDeliver, trace));
+    } else {
+      const injectRun = deps.injectRun ?? ((text) => defaultRun((DELIVER_AGENT_TIMEOUT_SECONDS + 20) * 1e3)(cli, buildRelayArgs({
+        agentId,
+        sessionId: resolved.sessionId,
+        hasChannel: false,
+        prompt: text
+      })));
+      const q = makeInjectQueue({
+        run: injectRun,
+        backoffsMs: [5e3, 15e3],
+        onRecord: (rec) => trace({ phase: "context", ...rec })
+      });
+      injectQueue = q;
+      deliver2 = withErrorLog(makeFastpathDeliver({
+        target: channelTarget,
+        runSend: deps.runSend ?? defaultRunSend(cli),
+        legacyDeliver: baseDeliver,
+        enqueueInject: (seq, text) => q.push(seq, text),
+        trace
+      }));
     }
-  };
-  let injectQueue;
-  let deliver;
-  if (channelTarget === null) {
-    deliver = withErrorLog(makeTracedLegacyDeliver(baseDeliver, trace));
-  } else {
-    const injectRun = deps.injectRun ?? ((text) => defaultRun((DELIVER_AGENT_TIMEOUT_SECONDS + 20) * 1e3)(cli, buildRelayArgs({
-      agentId,
-      sessionId,
-      hasChannel: false,
-      prompt: text
-    })));
-    const q = makeInjectQueue({
-      run: injectRun,
-      backoffsMs: [5e3, 15e3],
-      onRecord: (rec) => trace({ phase: "context", ...rec })
-    });
-    injectQueue = q;
-    deliver = withErrorLog(makeFastpathDeliver({
-      target: channelTarget,
-      runSend: deps.runSend ?? defaultRunSend(cli),
-      legacyDeliver: baseDeliver,
-      enqueueInject: (seq, text) => q.push(seq, text),
-      trace
-    }));
+    return { deliver: deliver2, injectQueue };
   }
+  const deliver = async (ev) => {
+    if (!pipeline) {
+      try {
+        const resolved = resolveSession({
+          cli,
+          agentId,
+          rideId,
+          env: process.env,
+          passedSessionId: deps.sessionId,
+          sessionKey: deps.sessionKey,
+          retry: SINGLE_SHOT_SESSION_RETRY
+        });
+        pipeline = buildPipeline(resolved);
+      } catch (e) {
+        resolveFailLog(e);
+        throw e;
+      }
+    }
+    return pipeline.deliver(ev);
+  };
   const lockFile = path8.join(stateRoot(), "run", `relay-${rideId}.pid`);
   const unlock = await deps.acquireLock(lockFile);
   if (!unlock) return 0;
   const cursorFile = path8.join(stateRoot(), "cursors", `openclaw-${rideId}`);
-  fs6.mkdirSync(path8.dirname(cursorFile), { recursive: true });
+  fs7.mkdirSync(path8.dirname(cursorFile), { recursive: true });
   const backoff = deps.backoffMs ?? DEFAULT_BACKOFF_MS;
   const controller = new AbortController();
   const startGuards = deps.startGuards ?? startRelayGuards;
@@ -1142,7 +1262,7 @@ async function runRideRelay(rideId, deps) {
     for (; ; ) {
       const r = await deps.runRelayLoop({ rideId, cursorFile, deliver, signal: controller.signal });
       if (r.sawTerminal) {
-        if (injectQueue) await injectQueue.drain(DRAIN_CAP_MS);
+        if (pipeline?.injectQueue) await pipeline.injectQueue.drain(DRAIN_CAP_MS);
         return 0;
       }
       if (controller.signal.aborted) return 0;
@@ -1174,7 +1294,7 @@ function parseFlag(argv, name) {
   const v = argv[i + 1];
   return v && !v.startsWith("--") ? v : void 0;
 }
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (isMainModule(import.meta.url)) {
   const argv = process.argv.slice(2);
   const rideId = argv[0];
   if (!rideId || rideId.startsWith("--")) {

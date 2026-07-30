@@ -1,6 +1,6 @@
 # Ride Reference
 
-> All agent-facing operations use `tada <subcommand> [args…]` (PATH-resident). Two scripts that cannot live on PATH (`ride-relay.js`, `install.js`) are invoked via `node ${SKILL_DIR}/scripts/<name>.js` — see `../SKILL.md` for the path convention.
+> All agent-facing operations use `amb <subcommand> [args…]` (PATH-resident). Two scripts that cannot live on PATH (`ride-relay.js`, `install.js`) are invoked via `node ${SKILL_DIR}/scripts/<name>.js` — see `../SKILL.md` for the path convention.
 
 ## Place Search
 
@@ -9,7 +9,7 @@
 Before running `place_search` to resolve a ride origin or destination, ask the user for their current location (latitude/longitude) to improve search accuracy. If the user does not know or does not provide it, proceed without it — the search will use the city center as bias point.
 
 ```bash
-tada place-search <wallet_address> <city> <query> [latitude] [longitude] --json
+amb place-search <wallet_address> <city> <query> [latitude] [longitude] --json
 ```
 
 - `city`: **City code** (e.g. `SIN`, `BKK`) or English city name. Do NOT use region codes (`SG`, `TH`) here — those are for `ride_search` only.
@@ -58,7 +58,7 @@ Show results to the user using `name` and `address`. Ask them to select one.
 If `next_action` is `REPORT_NO_MATCHES_TO_USER` (empty `results`): inform the user and ask them to try a different search term.
 
 > **⚠️ placeId provenance rule (strictly enforced)**
-> Any `placeId` / `place_id` argument passed to a subsequent command (`tada place-detail`, `tada map-session-create`, `tada ride-request` `locations[].placeId`) MUST be a value taken verbatim from `results[].placeId` of a `place_search` response — or, transitively, from a `place_detail` / `map-session-verify` response that itself originated from one.
+> Any `placeId` / `place_id` argument passed to a subsequent command (`amb place-detail`, `amb map-session-create`, `amb ride-request` `locations[].placeId`) MUST be a value taken verbatim from `results[].placeId` of a `place_search` response — or, transitively, from a `place_detail` / `map-session-verify` response that itself originated from one.
 > NEVER fabricate or substitute a place ID from any external system or from your own model knowledge.
 > If `results` does not contain the place the user wants, run `place_search` again with a different query.
 
@@ -73,7 +73,7 @@ Check the selected result's `locationPoint`:
 ### place_detail - Fetch coordinates (only when locationPoint is null)
 
 ```bash
-tada place-detail <wallet_address> <city> <place_id> --json
+amb place-detail <wallet_address> <city> <place_id> --json
 ```
 
 - `place_id`: `placeId` from the chosen `place_search` result
@@ -138,12 +138,12 @@ After obtaining coordinates (from autocomplete result in Case A-1, or from place
 If `subPlaces` exist, transform and pipe them via stdin. The `subPlaces` array from autocomplete/place_detail uses `locationPoint: { latitude, longitude }`, but `map-session-create` expects flat `{ id, name, lat, lng, address }`. Transform each subPlace: `locationPoint.latitude → lat`, `locationPoint.longitude → lng`.
 
 ```bash
-echo '{"subPlaces": [{"id":"...","name":"...","lat":<locationPoint.latitude>,"lng":<locationPoint.longitude>,"address":"..."},...]}'  | tada map-session-create <wallet_address> <city> <lat> <lng> [name]
+echo '{"subPlaces": [{"id":"...","name":"...","lat":<locationPoint.latitude>,"lng":<locationPoint.longitude>,"address":"..."},...]}'  | amb map-session-create <wallet_address> <city> <lat> <lng> [name]
 ```
 
 If no subPlaces, call without stdin:
 ```bash
-tada map-session-create <wallet_address> <city> <lat> <lng> [name]
+amb map-session-create <wallet_address> <city> <lat> <lng> [name]
 ```
 
 Returns `{ sessionId, mapUrl, expiresAt }`.
@@ -155,7 +155,7 @@ Show the place result together with the map link, e.g.:
 > You can verify or adjust the location on the map: [View on map](mapUrl)
 > If this looks correct, just let me know to proceed."
 
-Poll for the user's selection using `tada map-session-verify <session_id> --json` in a polling loop.
+Poll for the user's selection using `amb map-session-verify <session_id> --json` in a polling loop.
 
 **Step 3: React to whichever signal comes first**
 
@@ -167,7 +167,7 @@ Poll for the user's selection using `tada map-session-verify <session_id> --json
 | Poll result: `expired` | Proceed with the place result (session timed out). |
 | Poll result: `jwt_expired` | Re-authenticate (SIWE login), then run `map-session-create` again with fresh JWT. |
 
-`tada map-session-verify <session_id> --json` output events:
+`amb map-session-verify <session_id> --json` output events:
 - `{ "type": "waiting" }` — user has not selected yet
 - `{ "type": "completed", "result": { "lat", "lng", "address", "name", "placeId?", "subPlaceId?" } }` — use this for the locations array
 - `{ "type": "cancelled" }` — user closed the map without confirming
@@ -185,7 +185,7 @@ Frequent destinations and origins can be persisted locally so the agent can skip
 ### Save a place
 
 ```
-tada place-save <wallet_address> <google_maps_url> [--label LABEL] [--force]
+amb place-save <wallet_address> <google_maps_url> [--label LABEL] [--force]
 ```
 
 - `<google_maps_url>`: a `google.com/maps/place/…` URL or a `maps.app.goo.gl/…` short link. The gateway resolves it to a canonical `ChIJ…` placeId and formatted address.
@@ -207,7 +207,7 @@ The persisted row includes more fields than agents typically need; for downstrea
 ### List / look up saved places
 
 ```
-tada place-list <wallet_address> [--match QUERY [--match QUERY ...]]
+amb place-list <wallet_address> [--match QUERY [--match QUERY ...]]
 ```
 
 `--match` is repeatable. The agent should generate 2–5 candidate phrasings from the user's utterance (original wording, English transliteration, common aliases, plausible typos) and pass them all in one invocation.
@@ -229,12 +229,12 @@ Output shape:
 }
 ```
 
-Empty matches return exit code `0` — this is the signal to fall through to `tada place-search`.
+Empty matches return exit code `0` — this is the signal to fall through to `amb place-search`.
 
 ### Remove a saved place
 
 ```
-tada place-remove <wallet_address> <id_or_label>
+amb place-remove <wallet_address> <id_or_label>
 ```
 
 If the argument is an integer it's treated as the row `id`; otherwise as a `label`. Returns `{ removed: 1, id, label }` on success or `{ removed: 0, error: "NOT_FOUND" }` (still exit 0).
@@ -243,16 +243,16 @@ If the argument is an integer it's treated as the row `id`; otherwise as a `labe
 
 Before running this flow, apply the **"Acknowledge before a long booking turn"** guardrail in `SKILL.md`: unless this turn's response is a question (not signed in / no destination / already-known-ambiguous), send a short acknowledgement first, then proceed. See that guardrail for the OpenClaw `message send` mechanics.
 
-Places stored locally include both favorites (explicit, with labels) and history (auto-tracked from every successful ride-request, no label). `tada place-list --match QUERY` returns both, but `is_favorite=1` rows are sorted ahead of history, then by `hit_count` and `last_used_at`. When mixed results appear:
+Places stored locally include both favorites (explicit, with labels) and history (auto-tracked from every successful ride-request, no label). `amb place-list --match QUERY` returns both, but `is_favorite=1` rows are sorted ahead of history, then by `hit_count` and `last_used_at`. When mixed results appear:
 - If an `is_favorite=1` row matches, use it directly.
 - If only history rows match, confirm with the user before booking ("Want to go back to <X>?").
 
-Promote a history row to favorite with `tada place-favorite <wallet> <id_or_dedup_key> --label LABEL`. Demote with `tada place-unfavorite <wallet> <id_or_label>` (preserves hit_count). Auto-history fields on each row: `is_favorite`, `hit_count`, `last_used_at`. `hit_count` counts requests, not completions — cancelled rides still count.
+Promote a history row to favorite with `amb place-favorite <wallet> <id_or_dedup_key> --label LABEL`. Demote with `amb place-unfavorite <wallet> <id_or_label>` (preserves hit_count). Auto-history fields on each row: `is_favorite`, `hit_count`, `last_used_at`. `hit_count` counts requests, not completions — cancelled rides still count.
 
 When the user names an origin or destination, **always** start with:
 
 1. Generate 2–5 candidate phrasings (original / English / alias / typo correction).
-2. `tada place-list <wallet> --match "<c1>" --match "<c2>" …`
+2. `amb place-list <wallet> --match "<c1>" --match "<c2>" …`
 3. If `matches.length > 0`, construct the ride-request location directly from the row:
 
 ```json
@@ -272,7 +272,7 @@ If `matches` is empty (or the matched tier feels ambiguous and the candidates ar
 
 ## Ride
 
-> **Two modes — run `tada whoami` first and read `mode`.** The ride commands have different argument forms per mode:
+> **Two modes — run `amb whoami` first and read `mode`.** The ride commands have different argument forms per mode:
 > - **`mode: "tada"` (TADA/Throo member)** — card-paid. Use the **Member mode** flow immediately below. **Do NOT call `ride-pay-prepare` / `ride-pay-confirm`** — they are wallet-only and return `MODE_MISMATCH` for members.
 > - **`mode: "wallet"` (crypto)** — collateral/USDC-paid. Use the `<wallet_address>`-prefixed forms and the payment flow (`ride-pay-prepare → wallet-sign → ride-pay-confirm`) documented in the subsections after this one.
 
@@ -284,7 +284,7 @@ The card (`payment_item_uuid` in `ride-request`, `card_uuid` in `ride-search`) i
 
 **1. Search** — positional args (no `wallet_address`, no `region`; region is resolved automatically from coordinates). The trailing `card_uuid` is optional:
 ```bash
-tada ride-search <origin_lat> <origin_lng> <dest_lat> <dest_lng> [card_uuid]
+amb ride-search <origin_lat> <origin_lng> <dest_lat> <dest_lng> [card_uuid]
 ```
 
 Each entry in the result's `routes[]` carries `distance_display` and `duration_display` already localized to the rider's region (US regions in miles, elsewhere in km). Present these strings verbatim — do **not** convert distance units yourself.
@@ -303,7 +303,7 @@ An option with `na: true` always has `price: null`, and an option with `na: fals
 
 **2. Request** — a single JSON argument. `locations` is `[origin, destination]`; `payment_item_uuid` (the card) and `product_id` are both optional:
 ```bash
-tada ride-request '{"locations":[{"latitude":<oLat>,"longitude":<oLng>,"name":"<origin name>","address":"<origin address>"},{"latitude":<dLat>,"longitude":<dLng>,"name":"<dest name>","address":"<dest address>"}],"product_id":<optional int>}'
+amb ride-request '{"locations":[{"latitude":<oLat>,"longitude":<oLng>,"name":"<origin name>","address":"<origin address>"},{"latitude":<dLat>,"longitude":<dLng>,"name":"<dest name>","address":"<dest address>"}],"product_id":<optional int>}'
 ```
 Required field: `locations`. On success the ride is created in `PENDING` and the card is charged — **immediately start `ride-relay.js`** (see the ride-relay section). Do **not** call `ride-pay-prepare`/`ride-pay-confirm`.
 
@@ -318,14 +318,14 @@ Required field: `locations`. On success the ride is created in `PENDING` and the
 
 **3. Status / cancel** — the ride id is the `request_id` returned by `ride-request`:
 ```bash
-tada ride-status <request_id>
-tada ride-cancel <request_id> [reason] [--reason-type <id>]   # member form: no wallet_address argument
-tada ride-cancel-penalty <request_id> [--reason-type <id>]    # member-only: preview cancellation fee before cancelling
+amb ride-status <request_id>
+amb ride-cancel <request_id> [reason] [--reason-type <id>]   # member form: no wallet_address argument
+amb ride-cancel-penalty <request_id> [--reason-type <id>]    # member-only: preview cancellation fee before cancelling
 ```
 
 After the driver is assigned, member-mode cancellation is a **two-step protocol** — the first call returns the reason list instead of cancelling. See `ride_cancel` below.
 
-The status values and cancel-confirmation etiquette are identical to crypto mode — see `ride_status` and `ride_cancel` below. **Share links differ by mode:** member mode has no inline `rideShareUrl` on `ride-status`; use the `ride-share` command below (it calls the gateway). Crypto mode surfaces `rideShareUrl` inline on `ride-status` / monitor events.
+The status values and cancel-confirmation etiquette are identical to crypto mode — see `ride_status` and `ride_cancel` below. **Share links differ by mode:** member mode has no inline `rideShareUrl` on `ride-status` — use the `ride-share` command below (it calls the gateway). Monitor events are the exception: after a driver is assigned, the monitor fetches the link in the background, and from then on `ride_event` payloads carry `rideShareUrl` in both modes. The member-mode fetch is best-effort — if the gateway is slow or failing, the first events after assignment carry no link (and a ride where every attempt fails carries none at all). Crypto mode surfaces `rideShareUrl` inline on `ride-status` as well.
 
 #### Card resolution
 
@@ -362,16 +362,16 @@ Card register, delete, and set-default operations are not exposed by the CLI —
 > **JWT expired / `JWT_NOT_FOUND` mid-ride → re-authenticate with SIWE, then retry the failed command.**
 > If any crypto command (`ride-search`, `setup-check`, `ride-pay-prepare`, …) returns `JWT expired` or `JWT_NOT_FOUND`, run these three commands **in order**, then re-run the command that failed. They are **positional — do NOT invent `--siwe` / `--file` / any flag**, and the argument order is exact:
 > ```bash
-> tada siwe-request-message <wallet_address> <chain_id>   # → returns siwe_file path
-> tada wallet-sign <wallet_address> personal_sign <siwe_file>   # 3rd arg is the FILE PATH, not the message text → returns signature
-> tada siwe-submit <siwe_file> <signature>                # order: siwe_file FIRST, then signature
+> amb siwe-request-message <wallet_address> <chain_id>   # → returns siwe_file path
+> amb wallet-sign <wallet_address> personal_sign <siwe_file>   # 3rd arg is the FILE PATH, not the message text → returns signature
+> amb siwe-submit <siwe_file> <signature>                # order: siwe_file FIRST, then signature
 > ```
 > `chain_id`: `84532` (BASE_SEPOLIA) or `11155111` (ETH_SEPOLIA). Full reference: `references/wallet.md` → SIWE Authentication.
 
 ### ride_search - Search for a ride
 
 ```bash
-tada ride-search <wallet_address> <region> <origin_lat> <origin_lng> <dest_lat> <dest_lng>
+amb ride-search <wallet_address> <region> <origin_lat> <origin_lng> <dest_lat> <dest_lng>
 ```
 
 - `region`: Service region code (e.g. `SG`, `NY`)
@@ -381,10 +381,12 @@ The `search_id` (checkSum) from the result is cached in DB for 3 minutes.
 
 Each entry in the result's `routes[]` carries `distance_display` and `duration_display` already localized to the ride's region (US regions in miles, elsewhere in km). Present these strings verbatim — do **not** convert distance units yourself.
 
+Each entry in `options[]` also carries `price` and `price_currency`. In crypto mode `price_currency` is the **pay currency** (e.g. `USDC_base_sepolia`) because the projection selects the price entry matching it — so `price` is directly comparable to the `usdc` figure from `amb wallet-balance`, with no conversion. (Member mode's identically-named fields are fiat; see "Member mode" above.)
+
 ### ride_request - Request a ride
 
 ```bash
-tada ride-request <json_params>
+amb ride-request <json_params>
 ```
 
 `json_params` example:
@@ -424,9 +426,9 @@ The `locations` array is [origin, destination] in order.
 
 **⚠️ After ride_request succeeds, you MUST complete payment before starting ride-relay:**
 ```bash
-tada ride-pay-prepare <request_id> <wallet_address>   # → returns typed_data JSON to sign
-tada wallet-sign <wallet_address> eth_signTypedData_v4 '<typed_data_json>'   # payment uses eth_signTypedData_v4 + JSON (NOT personal_sign/siwe_file — that form is SIWE re-auth only)
-tada ride-pay-confirm <request_id> <signature>
+amb ride-pay-prepare <request_id> <wallet_address>   # → returns typed_data JSON to sign
+amb wallet-sign <wallet_address> eth_signTypedData_v4 '<typed_data_json>'   # payment uses eth_signTypedData_v4 + JSON (NOT personal_sign/siwe_file — that form is SIWE re-auth only)
+amb ride-pay-confirm <request_id> <signature>
 ```
 Then start `ride-relay.js` in the background. Do NOT start ride-relay while status is `WAITPAY`.
 
@@ -440,11 +442,11 @@ When the active mode is `tada` (TADA/Throo member), use the five gateway-backed 
 ### Command signatures
 
 ```bash
-tada place-search <query> <region> [originLat originLng] [--city CODE] [--session-token UUID] [--lang TAG] --json
-tada place-detail <place_id> <region> [city] [--lang TAG] --json
-tada place-nearby <lat> <lng> [limit] [--lang TAG] --json
-tada place-airports <city> [--lang TAG] --json
-tada place-reverse-geocode <lat> <lng> <region> [--lang TAG] --json
+amb place-search <query> <region> [originLat originLng] [--city CODE] [--session-token UUID] [--lang TAG] --json
+amb place-detail <place_id> <region> [city] [--lang TAG] --json
+amb place-nearby <lat> <lng> [limit] [--lang TAG] --json
+amb place-airports <city> [--lang TAG] --json
+amb place-reverse-geocode <lat> <lng> <region> [--lang TAG] --json
 ```
 
 - `region`: Two-letter region code. Currently supported: **`NY`**, **`SG`**. Any other value returns an error — there is no fallback.
@@ -508,14 +510,14 @@ tada place-reverse-geocode <lat> <lng> <region> [--lang TAG] --json
    }
    ```
    When booking a sub_place, also include `"sub_place_id": "<sub_place.id>"`.
-5. **Ride**: pass the resolved locations into `tada ride-search` / `tada ride-request` (member).
+5. **Ride**: pass the resolved locations into `amb ride-search` / `amb ride-request` (member).
 
 ### Alternative place-lookup commands
 
 | User intent | Command to use |
 |-------------|----------------|
 | "Near me" / nearby TADA pickup points | `place-nearby <lat> <lng>` — returns TADA POIs only |
-| Airport / terminal by city | `place-airports <city>` — e.g. `tada place-airports NYC` |
+| Airport / terminal by city | `place-airports <city>` — e.g. `amb place-airports NYC` |
 | Coordinates → address / place | `place-reverse-geocode <lat> <lng> <region>` — returns the nearest place; `nearest_place_id` if a TADA POI is close |
 
 Use `place-nearby` or `place-airports` instead of `place-search` when the user's intent clearly matches those cases; it reduces round trips and returns better-typed results.
@@ -523,7 +525,7 @@ Use `place-nearby` or `place-airports` instead of `place-search` when the user's
 ### ride_status - Check ride status
 
 ```bash
-tada ride-status <request_id> [wallet_address]
+amb ride-status <request_id> [wallet_address]
 ```
 
 Returns the current status and driver info of a ride request.
@@ -561,7 +563,7 @@ If the `driverInfo` field is present, a driver has been assigned (status is `ASS
 ### ride_share - Get a shareable trip-tracking link
 
 ```bash
-tada ride-share <request_id> [--lang TAG]
+amb ride-share <request_id> [--lang TAG]
 ```
 
 Returns a public link others can open to follow the trip's live location and status. Works in both modes from the local `request_id`:
@@ -575,8 +577,8 @@ Errors: `SHARE_NOT_AVAILABLE` (crypto, before driver assignment) · `SHARE_LINK_
 ### ride_cancel - Cancel a ride request
 
 ```bash
-# member: tada ride-cancel <request_id> [reason] [--reason-type <id>]
-# crypto: tada ride-cancel <request_id> [wallet_address] [reason]
+# member: amb ride-cancel <request_id> [reason] [--reason-type <id>]
+# crypto: amb ride-cancel <request_id> [wallet_address] [reason]
 ```
 
 - `request_id`: `requestId` returned after running `ride_request`
@@ -586,9 +588,9 @@ Errors: `SHARE_NOT_AVAILABLE` (crypto, before driver assignment) · `SHARE_LINK_
 
 **⚠️ Always follow this order:**
 
-1. Run `tada ride-status <request_id>` to check the current ride status
+1. Run `amb ride-status <request_id>` to check the current ride status
 2. If `driverInfo` exists or status is `ASSIGNED` or later → clearly inform the user that **a cancellation fee may apply** and ask them to confirm
-3. Run `tada ride-cancel <request_id>` only after the user confirms
+3. Run `amb ride-cancel <request_id>` only after the user confirms
 
 #### Two-step cancellation after driver assignment (member mode)
 
@@ -615,11 +617,11 @@ cancelled, and do not report an error — this is step 1 of 2.
 2. **The rider picks the reason. You must never choose one on their behalf — not even
    `999` / "Others".** Picking for them files a false reason against the driver and can
    change the fee. If the rider will not pick, the ride stays active; say so.
-3. Re-run with their choice: `tada ride-cancel <request_id> --reason-type <id>`.
+3. Re-run with their choice: `amb ride-cancel <request_id> --reason-type <id>`.
 
 `cancellation_fee` is the **default** fee (`fee_varies_by_reason: true`); the actual fee
 depends on the reason. For an exact figure before committing, run
-`tada ride-cancel-penalty <request_id> --reason-type <id>`.
+`amb ride-cancel-penalty <request_id> --reason-type <id>`.
 
 The reason list **narrows as the ride advances** (e.g. once the driver arrives). If the
 rider deliberates and the chosen id has gone stale, the CLI re-issues a fresh
@@ -656,19 +658,19 @@ Complete these three steps in sequence immediately after `ride_request`:
 
 **Step 1. Prepare payment:**
 ```bash
-tada ride-pay-prepare <request_id> <wallet_address> --json
+amb ride-pay-prepare <request_id> <wallet_address> --json
 ```
 Returns `{ typed_data }` — EIP-712 typed data for signing.
 
 **Step 2. Sign the typed data:**
 ```bash
-tada wallet-sign <wallet_address> eth_signTypedData_v4 '<typed_data_json>'
+amb wallet-sign <wallet_address> eth_signTypedData_v4 '<typed_data_json>'
 ```
 Pass the `typed_data` JSON from step 1 as the message argument. Returns `{ wallet_signature }`.
 
 **Step 3. Confirm payment:**
 ```bash
-tada ride-pay-confirm <request_id> <signature>
+amb ride-pay-confirm <request_id> <signature>
 ```
 Pass the `wallet_signature` from step 2. Returns `{ success, tx_hash }`.
 
@@ -676,11 +678,11 @@ Pass the `wallet_signature` from step 2. Returns `{ success, tx_hash }`.
 
 Streams ride status and driver chat events to the agent after payment is confirmed.
 
-**⚠️ Only start AFTER payment is confirmed** (`tada ride-pay-confirm` returns `success: true`). Do not start while status is `WAITPAY`.
+**⚠️ Only start AFTER payment is confirmed** (`amb ride-pay-confirm` returns `success: true`). Do not start while status is `WAITPAY`.
 
 ### How to start
 
-Immediately after `tada ride-pay-confirm` succeeds, start ride-relay using the platform's background primitive:
+Immediately after `amb ride-pay-confirm` succeeds, start ride-relay using the platform's background primitive:
 
 ```bash
 node ${SKILL_DIR}/scripts/ride-relay.js <request_id> [--agent <agent-id>] [--session-key <session-key>] [--session-id <sid>] [--once]
@@ -690,7 +692,7 @@ Refer to SKILL.md → "Event streaming: ride-relay" for the correct primitive pe
 
 - **Claude Code:** the `Monitor` tool, with ride-relay as its `command` (e.g. `node ${SKILL_DIR}/scripts/ride-relay.js <request_id>`). Monitor runs the command itself and turns each stdout line into a live notification, so every `ride_event` reaches the user as it arrives; the relay self-exits on the terminal `ride_event`, which ends the watch. Do **not** run the relay under a backgrounded `Bash` and try to attach `Monitor` to that shell — `Monitor` streams the stdout of its *own* command, it cannot watch a separate background process.
 - **Hermes:** `terminal(background=true, notify_on_complete=true)` with `--once`; on each `[IMPORTANT: Background process … completed]` notification, parse the status line, report it to the user verbatim, and spawn the next relay (agentic loop) until terminal status. See SKILL.md → "Hermes extra" for the loop and the manual-drain fallback.
-- **OpenClaw:** any background launch works — `exec` with `&` (or `nohup … &`) is fine. ride-relay **detaches itself**: it re-execs into a new session (so the tool call's process-group kill can't reap it), prints a `RELAY_DETACHED` note with the child pid and its log path (`~/.tada/run/relay-<request_id>.log`), and the command you ran exits immediately. Do not wait on it. Pass only `<request_id>`: ride-relay self-resolves its agent from the configured agents/workspace and its session from the unique active transcript containing that ride id. It never guesses the freshest session. `--agent`, `--session-key`, and `--session-id` remain optional compatibility/debug hints and must not be invented. `--once` under OpenClaw is ignored (no-op) — the relay stays long-running. See SKILL.md → "OpenClaw extra" for deterministic resolution + hybrid (channel-aware) delivery behavior.
+- **OpenClaw:** any background launch works — `exec` with `&` (or `nohup … &`) is fine. ride-relay **detaches itself**: it re-execs into a new session (so the tool call's process-group kill can't reap it), prints a `RELAY_DETACHED` note with the child pid and its log path (`~/.amb/run/relay-<request_id>.log`), and the command you ran exits immediately. Do not wait on it. Pass only `<request_id>`: ride-relay self-resolves its agent from the configured agents/workspace and its session from the unique active transcript containing that ride id. It never guesses the freshest session. `--agent`, `--session-key`, and `--session-id` remain optional compatibility/debug hints and must not be invented. `--once` under OpenClaw is ignored (no-op) — the relay stays long-running. See SKILL.md → "OpenClaw extra" for deterministic resolution + hybrid (channel-aware) delivery behavior.
 - **Other:** platform's own background primitive; ride-relay runs in stdout passthrough mode.
 
 After starting, tell the user the ride was requested and monitoring is active, then continue handling arriving events.
@@ -728,7 +730,7 @@ ride-relay is cursor-resumable — re-running the same command picks up automati
 3. **anything else (exit 2, SIGKILL, runtime timeout)** → transient termination. Restart with the same command.
    - However, if the same command exits 1 three times in a row, stop and surface to user.
 
-Before restarting, it's good practice to call `tada ride-status <request_id>` to check the ride is still active (if it's already terminal, no restart needed).
+Before restarting, it's good practice to call `amb ride-status <request_id>` to check the ride is still active (if it's already terminal, no restart needed).
 
 ### Exit codes
 
@@ -756,11 +758,11 @@ When a `ride_event` carries a `driverInfo` object (driver assigned), the payload
 Present driver info to the user in this order of priority: **license plate (carPlate) → car model (carModel) → photo (profilePhotoUrl) → name (name)**.
 If `profilePhotoUrl` is present, send it as an image using the `message` tool with `media=<profilePhotoUrl>`.
 
-If the `ride_event` payload contains `rideShareUrl` (only meaningful after driver match), surface it to the user as a markdown link (e.g. `[ride share](url)`) so they can share the live ride status externally.
+If the `ride_event` payload contains `rideShareUrl` (both modes carry it once a driver is matched and the link has been retrieved — treat its absence as "not yet", not as an error), surface it to the user as a markdown link (e.g. `[ride share](url)`) so they can share the live ride status externally.
 
 ### Sending chat messages
 
-To send a message to the driver while ride-relay is running, use `tada chat-send-message` (see `references/chat.md`).
+To send a message to the driver while ride-relay is running, use `amb chat-send-message` (see `references/chat.md`).
 
 ### Ride status classification
 
@@ -781,7 +783,7 @@ Used by the reconnect procedure to decide whether to restart ride-relay after an
 
 | Status | Action |
 |--------|--------|
-| `FINISHED` | Inform user the ride is complete. Check tip availability: call `tada tip-config` with the ride's region. If `enabled: true`, offer to tip the driver (see `references/tip.md`). |
+| `FINISHED` | Inform the user the ride is complete. Check tip availability with `amb tip-config` for the ride's region and offer a tip when enabled. Also offer an on-demand receipt, but do not query it until the user explicitly asks. On request, run `amb ride-receipt <request_id>` and surface stdout verbatim. |
 | `USER_CANCELED` | Inform user the ride was cancelled. No tip. |
 | `USER_CANCELED_BEFORE_CALL` | Inform user the ride was cancelled (before driver matching). No tip. |
 | `USER_CANCELED_NO_FREE` | Inform user the ride was cancelled and a cancellation fee was charged. No tip. |
@@ -793,8 +795,8 @@ Used by the reconnect procedure to decide whether to restart ride-relay after an
 | `EXPIRED_RECALLABLE` | Inform user that no driver was found but the ride can be re-requested with the same search. Offer to re-request immediately. |
 | `EXPIRED_BEFORE_PAY` | Inform user the payment window expired. Offer to search for a new ride. |
 | `NOT_MATCHED` | Inform user that no driver was matched. Offer to search for a new ride. |
-| `ERROR_PAYMENT` | Inform user of a payment processing error. Run `tada wallet-balance` and `tada deposit-status` to diagnose. |
-| `ERROR` | Inform user of a system error. Run `tada setup-check` to diagnose. |
+| `ERROR_PAYMENT` | Inform user of a payment processing error. Run `amb wallet-balance` and `amb deposit-status` to diagnose. |
+| `ERROR` | Inform user of a system error. Run `amb setup-check` to diagnose. |
 
 **Do not tell the user to wait** — report each event as it arrives. **Never say "let me know if you'd like to check the status" — do not hand the trigger to the user.**
 
@@ -805,116 +807,107 @@ Used by the reconnect procedure to decide whether to restart ride-relay after an
 ### ride_history - List completed rides
 
 ```bash
-tada ride-history <wallet_address> [limit]
+amb ride-history <wallet_address> [limit]
 ```
 
 - Returns completed rides with `tipInfo.tipPaymentAvailable` per ride.
 - Display per ride: `rideTimeStamp`, `pickup → destination`.
 
-### ride_history_detail / ride_receipt - Show ride receipt
+### ride_history_detail / ride_receipt
 
 ```bash
-tada ride-history-detail <wallet_address> <request_id>
-# Or, with the more direct name:
-tada ride-receipt <wallet_address> <request_id>
+# Raw wallet detail:
+amb ride-history-detail <wallet_address> <request_id>
+# Raw member detail, when member mode is active:
+amb ride-history-detail <request_id>
+# Canonical user-facing receipt:
+amb ride-receipt <request_id>
 ```
 
-`ride-receipt` is an alias of `ride-history-detail` — both invoke the same
-handler. Pick whichever name better matches the user's intent (`ride-receipt`
-reads more naturally after a ride finishes; `ride-history-detail` reads more
-naturally after browsing the history list).
+`ride-history-detail` is raw diagnostic output. Wallet detail comes from
+`GET /v2/ride-histories/detail/{rideRequestId}`; member detail comes from
+`GET /v1/rides/{rideId}`. `--account=tada|wallet` may override its diagnostic mode.
 
-Calls `GET /v2/ride-histories/detail/{rideRequestId}` and returns the full
-`RideHistoryDetailDto`:
+`ride-receipt` is canonical Markdown; surface it verbatim. Its local ride record
+selects wallet or member mode, and a conflicting `--account` override is rejected.
+It preserves nested fare items for both modes. Wallet receipts also show currency
+conversion context and payment, refund, and paid-tip transaction links.
 
-- `bookingNumber`, `status`, `rideDate`, `rideType`, `region`, `paymentMethod`.
-- `locations[]` — pickup and dropoff (name + address).
-- `driverInfo` — name, phone, car (model / plate / color / maker), `profilePhotoUrl`, `tlcDetail` (where applicable).
-- `receiptInfo` — `paidAmount`, `paidNetwork`, `paidTxHash`, `receiptStatus`.
-- `refundReceiptInfo` — present when the ride was refunded (`refundAmount`, `refundTxHash`).
-- `discountInfo` — applied promotion / voucher.
-- `tipInfo` — tip payment state (with `tipRequest.txHash` once paid).
-- `receiptBreakdown[]` — fare items per entity (rider / driver), with `totalFare`, `currency`, `subtotalName`, `fareItems[]`.
-
-Plain-mode output (the default for humans) attaches an `explorerUrl` field
-next to each on-chain transaction hash (`paidTxHash`, `refundTxHash`,
-`tipRequest.txHash`) when the `paidNetwork` is recognised
-(POLYGON / POLYGON_AMOY / BASE / BASE_SEPOLIA / ETHEREUM / ETHEREUM_SEPOLIA).
-Use `--json` to get the raw DTO without enrichment — useful when piping into
-another command or parsing programmatically.
+Canceled or unsettled rides do not produce a canonical receipt;
+`RECEIPT_NOT_READY` asks the caller to retry later.
 
 ## Full Ride Booking Flow
 
 0. Initial setup (first time only)
 ```bash
 # Built-in Privy wallet (agent: always pass --no-wait — see references/wallet.md)
-tada wallet-setup --no-wait
+amb wallet-setup --no-wait
 ```
 
 1. Check wallet status
 ```bash
-tada wallet-status
+amb wallet-status
 ```
 
 2. SIWE login (required to obtain JWT)
 ```bash
-tada siwe-request-message 0x1234... <chain_id>
-tada wallet-sign 0x1234... personal_sign <siwe_file>
-tada siwe-submit <siwe_file> <signature>
+amb siwe-request-message 0x1234... <chain_id>
+amb wallet-sign 0x1234... personal_sign <siwe_file>
+amb siwe-submit <siwe_file> <signature>
 ```
 
 3. Phone verification (first time only)
 ```bash
 # Always check server status first
-tada phone-verify-check 0x1234... +821012345678
+amb phone-verify-check 0x1234... +821012345678
 # Only if verified: false → send OTP and confirm
-tada phone-verify-start 0x1234... +821012345678
-tada phone-verify-confirm 0x1234... +821012345678 123456
+amb phone-verify-start 0x1234... +821012345678
+amb phone-verify-confirm 0x1234... +821012345678 123456
 ```
 
 4. Readiness check — must pass before booking
 ```bash
-tada setup-check 0x1234...
+amb setup-check 0x1234...
 # Proceed only if ready_for_ride: true
 ```
 
 5. Resolve places (for each of origin and destination):
 ```bash
 # 5a. Search
-tada place-search 0x1234... SIN "Marina Bay" --json
+amb place-search 0x1234... SIN "Marina Bay" --json
 # 5b. Get detail for selected place (only if locationPoint is null)
-tada place-detail 0x1234... SIN <place_id> --json
+amb place-detail 0x1234... SIN <place_id> --json
 # 5c. ⚠️ MANDATORY: Create map session (pipe subPlaces if present)
-tada map-session-create 0x1234... SIN <lat> <lng> [name]
+amb map-session-create 0x1234... SIN <lat> <lng> [name]
 # 5d. Poll map-session-verify until completed/cancelled/expired
-tada map-session-verify <session_id> --json
+amb map-session-verify <session_id> --json
 ```
 
 6. Search for a ride
 ```bash
-tada ride-search 0x1234... SG 37.5665 126.9780 37.4979 127.0276
+amb ride-search 0x1234... SG 37.5665 126.9780 37.4979 127.0276
 ```
 
 7. Request a ride
 - Confirm rider name and phone with the user before proceeding. Ask if not already provided.
 ```bash
-tada ride-request '{"wallet_address":"0x1234...","search_id":"...","product_code":"STANDARD","region":"SG","pay_currency":"USDC_base_sepolia","locations":[...],"rider":{"name":"John Doe","phone":"+821012345678"}}'
+amb ride-request '{"wallet_address":"0x1234...","search_id":"...","product_code":"STANDARD","region":"SG","pay_currency":"USDC_base_sepolia","locations":[...],"rider":{"name":"John Doe","phone":"+821012345678"}}'
 ```
 
 7-1. (Optional) Cancel — always check status first
 ```bash
 # 1. Check current ride status
-tada ride-status 550e8400-e29b-41d4-a716-446655440000 0x1234...
+amb ride-status 550e8400-e29b-41d4-a716-446655440000 0x1234...
 # If driverInfo exists or status is ASSIGNED or later → warn about possible fee and confirm with user
 # 2. After user confirms, execute cancellation
-tada ride-cancel 550e8400-e29b-41d4-a716-446655440000 0x1234...
+amb ride-cancel 550e8400-e29b-41d4-a716-446655440000 0x1234...
 ```
 
 8. Payment signing
 ```bash
-tada ride-pay-prepare 550e8400-e29b-41d4-a716-446655440000 0x1234... --json
-tada wallet-sign 0x1234... eth_signTypedData_v4 '<typed_data_json>'
-tada ride-pay-confirm 550e8400-e29b-41d4-a716-446655440000 0xsignature...
+amb ride-pay-prepare 550e8400-e29b-41d4-a716-446655440000 0x1234... --json
+amb wallet-sign 0x1234... eth_signTypedData_v4 '<typed_data_json>'
+amb ride-pay-confirm 550e8400-e29b-41d4-a716-446655440000 0xsignature...
 ```
 
 9. Start ride-relay (background)
@@ -925,17 +918,19 @@ Launch with the platform's background primitive (see SKILL.md → "Event streami
 
 10. Cleanup — ride-relay exits on its own when a terminal `ride_event` is reached. If you need to stop it early (e.g. user cancelled and you already handled the terminal event), use the platform's kill primitive (Claude Code `TaskStop` to stop the Monitor, OpenClaw `process kill`).
 
+11. On `FINISHED`, ride-relay prints the completion prompt and offers both a tip and an on-demand receipt. It does not fetch the receipt. On an explicit request, run `amb ride-receipt <request_id>` and surface the live result verbatim. If settlement is pending, ask the user to try again shortly. Only after the user has requested and seen a canonical receipt should you check whether the wallet can still afford the next ride — see SKILL.md → "USDC bridge".
+
 ## Error Handling
 
 When a command fails, take the following action based on the error code:
 
 | Error code | Action |
 |------------|--------|
-| `WALLET_NOT_FOUND` | Run `tada wallet-setup --no-wait` |
-| `JWT_NOT_FOUND` | Run `tada siwe-request-message` + `tada siwe-submit` |
-| `PHONE_NOT_VERIFIED` | Run `tada phone-verify-start` + `tada phone-verify-confirm` |
-| `INSUFFICIENT_DEPOSIT` | Run `tada deposit-status` to see which networks need deposits, then run `tada deposit-add <wallet> <network> <token> <amount>` for the appropriate network |
-| `INSUFFICIENT_BALANCE` | Run `tada wallet-balance` and top up the wallet |
-| `RIDE_REQUEST_FAILED` | Run both `tada deposit-status` and `tada wallet-balance` to identify the cause |
+| `WALLET_NOT_FOUND` | Run `amb wallet-setup --no-wait` |
+| `JWT_NOT_FOUND` | Run `amb siwe-request-message` + `amb siwe-submit` |
+| `PHONE_NOT_VERIFIED` | Run `amb phone-verify-start` + `amb phone-verify-confirm` |
+| `INSUFFICIENT_DEPOSIT` | Run `amb deposit-status` for the shortfall, then `amb deposit-add <wallet> <network> <token> <amount>`. **`deposit-add` spends Base USDC too** — if `amb wallet-balance` shows too little USDC on the payment chain and a positive USDC row on the bridge source chain, bridge first (SKILL.md → "USDC bridge"), then deposit, then request the ride. `requiredToActivate[].tokenWei` is **raw** (USDC has 6 decimals: `"4000000"` is 4.00 USDC) — convert before passing it anywhere that takes decimal, such as `bridge-usdc`. It is the amount `deposit-add` will **spend**, so the amount to *bridge* is that minus what the wallet already holds on the payment chain: `max(0, amount - payment-chain USDC)`. Note the MVL entry is a different currency — do not bridge against it. When `requiredToActivate` is `null`, do not guess an amount: report `requiredToActivateReason` instead. |
+| `INSUFFICIENT_BALANCE` | Run `amb wallet-balance`. If the bridge source chain's USDC row has funds, the wallet can be topped up from Ethereum — see SKILL.md → "USDC bridge". If that chain has no rows at all, this build has no bridge and that is not the problem. Once the bridge lands, retry the payment or tip that failed. |
+| `RIDE_REQUEST_FAILED` | Run both `amb deposit-status` and `amb wallet-balance` to identify the cause |
 
-For unknown errors, run `tada setup-check` first to check overall status.
+For unknown errors, run `amb setup-check` first to check overall status.

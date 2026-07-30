@@ -1,20 +1,20 @@
 # Wallet & Authentication Reference
 
-> All agent-facing operations use `tada <subcommand> [args…]` (PATH-resident). Two scripts that cannot live on PATH (`ride-relay.js`, `install.js`) are invoked via `node ${SKILL_DIR}/scripts/<name>.js` — see `../SKILL.md` for the path convention.
+> All agent-facing operations use `amb <subcommand> [args…]` (PATH-resident). Two scripts that cannot live on PATH (`ride-relay.js`, `install.js`) are invoked via `node ${SKILL_DIR}/scripts/<name>.js` — see `../SKILL.md` for the path convention.
 
 ## Signing Strategy
 
 Crypto-mode users sign with the built-in Privy wallet:
 
 ```bash
-tada wallet-sign <address> personal_sign <siwe_file>
+amb wallet-sign <address> personal_sign <siwe_file>
 ```
 
 Older installs may still hold a wallet of type `external` (registration of new ones is no longer offered). Those cannot be signed for by the skill — ask the user to sign the message with their own wallet tool and pass the signature back.
 
 Check wallets:
 ```bash
-tada wallet-status
+amb wallet-status
 # If multiple wallets exist, ask the user which one to use
 ```
 
@@ -24,7 +24,7 @@ tada wallet-status
 
 ```bash
 # Agent invocation — ALWAYS use --no-wait
-tada wallet-setup --no-wait [--force-new]
+amb wallet-setup --no-wait [--force-new]
 ```
 
 Creates the user's built-in Privy wallet, or checks the status of an existing one. This is the only wallet-creation path — do not ask the user to pick a wallet type; run it as soon as a crypto wallet is needed.
@@ -34,7 +34,7 @@ Creates the user's built-in Privy wallet, or checks the status of an existing on
 ### wallet_status - List wallets
 
 ```bash
-tada wallet-status
+amb wallet-status
 ```
 
 Returns all registered wallets and their validity status.
@@ -44,7 +44,7 @@ Returns all registered wallets and their validity status.
 ### wallet_check_auth - Check auth status
 
 ```bash
-tada wallet-setup-verify [--wait]
+amb wallet-setup-verify [--wait]
 ```
 
 Checks whether webapp authentication is complete. Returns one of `no_pending` / `pending` (with `auth_url`) / `ready` (with `wallet_address`) / `failed`.
@@ -63,17 +63,17 @@ Never display the raw URL as plain text — it is long and wraps in the terminal
 ### wallet_sign - Sign a message
 
 ```bash
-tada wallet-sign <wallet_address> <sign_method> <siwe_file|json>
+amb wallet-sign <wallet_address> <sign_method> <siwe_file|json>
 ```
 
 The third argument depends on `sign_method` — it is **not** a raw message string:
-- `personal_sign` → pass the **`siwe_file` path** returned by `tada siwe-request-message` (used for SIWE re-auth): `tada wallet-sign <wallet_address> personal_sign <siwe_file>`
-- `eth_signTypedData_v4` → pass the **typed-data JSON** (used for ride/tip payment): `tada wallet-sign <wallet_address> eth_signTypedData_v4 '<typed_data_json>'`
+- `personal_sign` → pass the **`siwe_file` path** returned by `amb siwe-request-message` (used for SIWE re-auth): `amb wallet-sign <wallet_address> personal_sign <siwe_file>`
+- `eth_signTypedData_v4` → pass the **typed-data JSON** (used for ride/tip payment): `amb wallet-sign <wallet_address> eth_signTypedData_v4 '<typed_data_json>'`
 
 ### wallet_send_tx - Send transaction
 
 ```bash
-tada wallet-send-tx <wallet_address> <to> <value_eth> <chain_id> [data]
+amb wallet-send-tx <wallet_address> <to> <value_eth> <chain_id> [data]
 ```
 
 ## SIWE Authentication
@@ -81,18 +81,18 @@ tada wallet-send-tx <wallet_address> <to> <value_eth> <chain_id> [data]
 ### siwe_get_message - Generate SIWE message
 
 ```bash
-tada siwe-request-message <wallet_address> <chain_id>
+amb siwe-request-message <wallet_address> <chain_id>
 ```
 
-Saves the message as a file in `TADA_AGENT_DATA_DIR` and returns the `siwe_file` path.
+Saves the message under the Ambient state data directory and returns the `siwe_file` path.
 
 ### siwe_login - SIWE login
 
 ```bash
-tada siwe-submit <siwe_file> <signature>
+amb siwe-submit <siwe_file> <signature>
 ```
 
-- `siwe_file`: File path returned by `tada siwe-request-message`
+- `siwe_file`: File path returned by `amb siwe-request-message`
 - JWT is saved to DB and reused by subsequent commands.
 
 ## Phone Verification
@@ -100,28 +100,28 @@ tada siwe-submit <siwe_file> <signature>
 **Always follow this order.**
 
 1. Get the phone number from the user (E.164 format, e.g. +821012345678)
-2. Run `tada phone-verify-check` to check verification status on the server
+2. Run `amb phone-verify-check` to check verification status on the server
    - `verified: true` → Saved to local DB, done. No OTP needed
    - `verified: false` → Proceed to step 3
-3. Send OTP with `tada phone-verify-start`
-4. Get OTP code from user and confirm with `tada phone-verify-confirm`
+3. Send OTP with `amb phone-verify-start`
+4. Get OTP code from user and confirm with `amb phone-verify-confirm`
 
 ### phone_verify_check - Check server verification status (always run first)
 
 ```bash
-tada phone-verify-check <wallet_address> <phone>
+amb phone-verify-check <wallet_address> <phone>
 ```
 
 ### phone_verify_start - Send OTP (only when phone_verify_check returns verified: false)
 
 ```bash
-tada phone-verify-start <wallet_address> <phone>
+amb phone-verify-start <wallet_address> <phone>
 ```
 
 ### phone_verify_confirm - Confirm OTP
 
 ```bash
-tada phone-verify-confirm <wallet_address> <phone> <code>
+amb phone-verify-confirm <wallet_address> <phone> <code>
 ```
 
 ## Balance Check
@@ -129,42 +129,54 @@ tada phone-verify-confirm <wallet_address> <phone> <code>
 ### balance_check - Check wallet balance
 
 ```bash
-tada wallet-balance <wallet_address>
+amb wallet-balance <wallet_address>
 ```
 
-Returns the actual wallet balance (not the deposit contract balance):
+Returns what the wallet actually holds (not the deposit contract balance). One row per (chain, token):
 
 ```json
 {
-  "eth": "0.0",
-  "usdc": "12.500000",
-  "source_usdc": "310.000000"
+  "wallet_address": "0x681D…",
+  "balances": [
+    { "network": "BASE",     "symbol": "ETH",  "amount": "0" },
+    { "network": "BASE",     "symbol": "USDC", "amount": "12.5",  "address": "0x8335…" },
+    { "network": "ETHEREUM", "symbol": "ETH",  "amount": "0" },
+    { "network": "ETHEREUM", "symbol": "USDC", "amount": "310",   "address": "0xA0b8…" },
+    { "network": "ETHEREUM", "symbol": "MVL",  "amount": "40000", "address": "0xA849…" }
+  ],
+  "errors": []
 }
 ```
 
-- `eth` / `usdc`: balances on the **payment chain** — the chain crypto-mode rides settle on (Base).
-- `source_usdc`: USDC on the **bridge source chain** (Ethereum) — what `bridge-usdc` would move.
+Every row names its own chain, so never assume which chain a balance is on. Which network plays which role depends on the build — on production, rides are paid in USDC on `BASE` while collateral and bridging live on `ETHEREUM`.
 
-**`source_usdc: "0"` and a missing `source_usdc` mean different things. Do not conflate them:**
+- `address` is **absent on native rows**, and that absence is what marks a row as the chain's native coin. Token rows always carry the contract address — including MVL, so this output is one place to get the address `deposit-add` needs.
+- `amount` is a decimal string with no padding: `"0"`, `"12.5"`, `"40000"`. Do not expect a fixed number of decimal places.
+- Rows are ordered payment chain first, then the bridge source chain, then deposit chains; within a chain, native → USDC → MVL.
 
-| Value | Meaning | What to tell the user |
+- `errors`: rows that could not be read, as `{ network, symbol, error }`. Reads are isolated per row, so one unreachable chain or one failing token lookup never suppresses the others — the healthy rows still appear in `balances`.
+
+**Three situations look similar and mean different things. Do not conflate them:**
+
+| Situation | Meaning | What to tell the user |
 |---|---|---|
-| `"0"` (or any number) | Bridging is available on this build | With `"0"`: they have nothing on the source chain to bridge. With a positive number: that much is bridgeable. |
-| key absent | This build has **no bridge configured** | Bridging is unavailable here — not a balance problem. |
+| Row present, `"amount": "0"` | Configured, read fine | They hold none of it right now. |
+| Row absent **and** listed in `errors` | Configured, but the read **failed** | A temporary lookup problem — the balance is unknown, not zero. Retry. |
+| Row absent **and** not in `errors` | That (chain, token) pair is **not configured in this build** | The capability is unavailable here — not a balance problem. |
 
-Reporting "bridging is unavailable" for a user who simply has an empty source wallet sends them to the wrong fix.
+So check `errors` before concluding anything from a missing row. If no `ETHEREUM` rows appear and `errors` is empty, this build genuinely has no bridge and no Ethereum deposit chain. If they are missing because they are in `errors`, saying "bridging is unavailable" sends the user to the wrong fix — and reporting an unknown balance as `0` is just as bad.
 
 ## USDC Bridge (Ethereum → Base)
 
 Crypto-mode ride payment settles in **Base USDC only**, but USDC liquidity lives on Ethereum, so a user can hold plenty of USDC and still be unable to pay for a ride. `bridge-usdc` moves Ethereum USDC to Base USDC over Circle CCTP V2. The user needs **no gas token on either chain** — gas is sponsored on both sides.
 
-**When to use it:** `tada wallet-balance <wallet>` shows `usdc` too low for the ride, and `source_usdc` has funds.
+**When to use it:** two situations, handled differently — see SKILL.md → "USDC bridge". In short: a **Standard** top-up right after a ride ends (free, ~20 min, always ask), and a **Fast** transfer when the user needs to ride now (small fee, ~40 s, skip the fee question when `bridge-usdc-quote` reports `preauthorized: true`).
 
 ### bridge_usdc - Start or resume a bridge
 
 ```bash
-tada bridge-usdc <wallet_address> <amount> [--fast] [--wait]   # start
-tada bridge-usdc <wallet_address>                              # resume
+amb bridge-usdc <wallet_address> <amount> [--fast] [--wait]   # start
+amb bridge-usdc <wallet_address>                              # resume
 ```
 
 #### Amount units — decimal USDC, NOT raw
@@ -172,8 +184,8 @@ tada bridge-usdc <wallet_address>                              # resume
 `bridge-usdc` takes **decimal USDC** (`50`, `50.5`). `deposit-add` takes **raw** 6-decimal units (`50000000`). The divergence is deliberate — an agent producing `50` is far safer than one producing `50000000` — but the two commands sitting side by side is a live confusion risk.
 
 ```bash
-tada bridge-usdc 0xabc… 50        # 50 USDC   ✅
-tada bridge-usdc 0xabc… 50000000  # 50 million USDC — rejected by the balance check, not by the parser
+amb bridge-usdc 0xabc… 50        # 50 USDC   ✅
+amb bridge-usdc 0xabc… 50000000  # 50 million USDC — rejected by the balance check, not by the parser
 ```
 
 Because of that risk **every `bridge-usdc` response carries both `amount_usdc` and `amount_raw`**. Read them back and confirm they match what you meant before reporting anything to the user.
@@ -202,19 +214,69 @@ A blocking call that hits its timeout is **not a failure**. It exits 0 with the 
 #### Resuming
 
 ```bash
-tada bridge-usdc <wallet_address>
+amb bridge-usdc <wallet_address>
 ```
 
 Calling `bridge-usdc` with **no amount** picks up the wallet's unfinished job and advances it as far as it can. It is idempotent and is the normal way to continue — this is the one command to remember. Every unfinished response names it in `next_step`.
+
+When you report an unfinished bridge to the user, say **how it finishes**, not just that it is unfinished: the server relayer attempts to continue through attestation and mint, with the same-job CLI resume as fallback. Tell them to check the existing job later and use its `next_step` only if it remains pending. Reporting only the status leaves them unsure a non-blocking Standard transfer will ever land.
 
 Only one bridge per wallet may be in flight; starting a second one fails with `BRIDGE_JOB_IN_FLIGHT`. There is no `--force` override, and none is needed: resuming resolves a stuck job on its own.
 
 If another process is already advancing the job, the command returns immediately with `lease_held: true` rather than blocking.
 
+### bridge_usdc_quote - Price a transfer without starting one
+
+```bash
+amb bridge-usdc-quote <wallet_address> <amount> [--fast]
+```
+
+A pure read: one fee lookup, one balance read, one local lookup. **It never creates a job**, so it cannot consume the wallet's single in-flight slot.
+
+```json
+{
+  "amount_usdc": "90", "amount_raw": "90000000",
+  "mode": "standard",
+  "max_fee_usdc": "0", "max_fee_raw": "0",
+  "required_usdc": "90",
+  "source": "ETHEREUM",
+  "source_balance_usdc": "282",
+  "sufficient": true,
+  "below_min": false, "min_usdc": "1",
+  "preauthorized": true,
+  "grant_max_fee_usdc": "0.1"
+}
+```
+
+- `sufficient` — whether the USDC balance on the bridge source chain (the `ETHEREUM`/`USDC` row of `wallet-balance`) covers `amount + max_fee`. **Not an error**: a shortfall is an answer to the question you asked. Shrink the amount and quote again if you want.
+- `below_min` — below the build-configured minimum bridge amount. Also a field, not an error. Starting such a transfer *is* refused (`BRIDGE_AMOUNT_BELOW_MIN`), but asking about it is not.
+- `preauthorized` — whether this transfer's fee is already approved. **Read this instead of comparing fees yourself.** Standard is always `true` (a zero fee has nothing to approve), which is about the fee only — it is never consent to move the money.
+  The same check runs inside `bridge-usdc --fast` and refuses with `BRIDGE_FEE_NOT_AUTHORIZED`, so this field tells you what *would* happen rather than being the only thing standing between the fee and the wallet. That is a guard against drift, not a security boundary — `bridge-fast-grant` is an ordinary command, so raising the ceiling is one call away. Asking the user remains the caller's job.
+
+### bridge_fast_grant - Standing approval for Fast fees
+
+```bash
+amb bridge-fast-grant <wallet_address>                    # read
+amb bridge-fast-grant <wallet_address> <max_fee_usdc>     # set
+amb bridge-fast-grant <wallet_address> --revoke           # clear
+```
+
+All three return the same shape; branch on `granted`:
+
+```json
+{ "wallet_address": "0x…", "granted": true,
+  "max_fee_usdc": "0.1", "max_fee_raw": "100000",
+  "granted_at": "2026-07-21 04:12:00" }
+```
+
+The grant does not expire; it lasts until revoked. Ask for it the first time an express bridge is actually needed — never during setup, where the user has no context for the question. It is scoped to one wallet.
+
+`BRIDGE_GRANT_INVALID` means either the ceiling was not a decimal USDC amount, or `--revoke` was combined with an amount. Nothing was stored or cleared in either case — a consent command does not guess which operation you meant.
+
 ### bridge_usdc_status - Read bridge job state
 
 ```bash
-tada bridge-usdc-status <wallet_address> [job_id]
+amb bridge-usdc-status <wallet_address> [job_id]
 ```
 
 A **pure local read** — no network, no wallet registration needed, no side effects (same contract as `deposit-relay-status`). With `job_id` it returns that one job; without it, every job for the wallet plus `active_job_id`.
@@ -232,15 +294,38 @@ Both commands render a job the same way:
 | `source_chain_id`, `dest_chain_id` | |
 | `burn_tx_hash`, `mint_tx_hash` | Present once each leg has a resolved hash |
 | `mint_attempts`, `failure_reason` | Present when non-zero / set |
-| `minted_amount`, `minted_amount_raw` | **Only ever present on `COMPLETED`** |
+| `minted_amount`, `minted_amount_raw` | **Only ever present on `COMPLETED`.** Both are `null` in the one case below. |
+| `minted_amount_unknown`, `minted_amount_note` | `COMPLETED`, but the credited amount could not be read (Fast transfers only). The USDC **did** arrive — that part is confirmed on-chain — and only the exact figure is missing. Relay the note; it sends the user to `wallet-balance`. |
 | `funds_mid_flight`, `recovery` | See below |
 | `note` | One-line explanation of why the job did not advance this pass. Worth relaying. |
 | `verdict_withheld` | The job cannot yet be judged either way (still inside the burn grace window). It is **not** a failure — resume later. |
 | `privy_status` | Diagnostic: the wallet provider's status for the transaction being tracked |
 | `lease_held` | Another process is already advancing this job; nothing was submitted |
 | `next_step` | Present while the job is unfinished |
+| `agent_guidance` | Present only while the job is unfinished; the state-accurate reporting contract described below |
 
 Statuses run `INITIATED` → `BURN_SUBMITTED` → `ATTESTED` → `MINT_SUBMITTED` → `COMPLETED`, with `FAILED` as the other terminal state. **Only `COMPLETED` means the money arrived** — see `../SKILL.md` for the reporting rule.
+
+`agent_guidance.current_stage` maps the stored status without inference:
+
+| Job status | `current_stage` | Meaning |
+|---|---|---|
+| `INITIATED` | `BURN_CONFIRMATION_PENDING` | The burn transaction was sent to the wallet provider; its on-chain success/hash is not confirmed yet |
+| `BURN_SUBMITTED` | `ATTESTATION_PENDING` | The burn is confirmed; Circle attestation is pending |
+| `ATTESTED` | `SERVER_MINT_PENDING` | Attestation is available; the server mint is pending |
+| `MINT_SUBMITTED` | `MINT_CONFIRMATION_PENDING` | The mint transaction was submitted; its confirmation is pending |
+
+The object also carries `remaining_stages`,
+`completion_mode: SERVER_RELAY_WITH_CLI_FALLBACK`, the read-only
+`status_command`, `do_not_start_new_transfer`, and
+`user_action_required: CHECK_STATUS_LATER`.
+Cover every field when reporting to the user. Translate the identifiers rather
+than quoting them mechanically, but do not claim a later stage than
+`current_stage`.
+
+After starting or resuming a non-terminal bridge, report the decimal amount and symbol, name both source and destination chains, and distinguish burn submission, attestation waiting, and the server relay's future mint. Never call `INITIATED` or `BURN_SUBMITTED` complete. Tell the user to check the existing job instead of starting the transfer again, and never expose raw base units.
+
+`COMPLETED` with `minted_amount_unknown: true` still means the USDC arrived. Preserve `minted_amount_note` and use `amb wallet-balance <wallet_address>` to verify the current balance; do not describe the null amount as a failed bridge.
 
 ### Funds mid-flight (`FAILED` with money in between)
 
@@ -254,9 +339,10 @@ A `FAILED` job whose burn landed but whose mint never did leaves USDC on neither
 |---|---|
 | `BRIDGE_NOT_CONFIGURED` | This build has no bridge. Nothing the user can fix. |
 | `BRIDGE_AMOUNT_INVALID` | Not a decimal USDC amount (digits, at most 6 decimal places, no sign or exponent). |
-| `BRIDGE_AMOUNT_BELOW_MIN` | Below `TADA_AGENT_BRIDGE_MIN_USDC`. Nothing was submitted. |
+| `BRIDGE_AMOUNT_BELOW_MIN` | Below the build-configured minimum bridge amount. Nothing was submitted. |
 | `BRIDGE_INSUFFICIENT_USDC` | Source-chain USDC is short of `amount + maxFee`. Nothing was submitted; the message breaks out both parts. |
-| `BRIDGE_JOB_IN_FLIGHT` | A bridge is already running for this wallet. Resume it instead (`tada bridge-usdc <wallet>`). |
+| `BRIDGE_FEE_NOT_AUTHORIZED` | A Fast transfer's fee is not covered by a standing approval for this wallet. **Nothing was submitted.** Approve a ceiling with `bridge-fast-grant`, or drop `--fast` (Standard costs nothing). The check runs against the fee computed at start, so a fee that rose since you quoted is refused rather than spent. |
+| `BRIDGE_JOB_IN_FLIGHT` | A bridge is already running for this wallet. Resume it instead (`amb bridge-usdc <wallet>`). |
 | `BRIDGE_NO_ACTIVE_JOB` | Resume was called but nothing is unfinished. Pass an amount to start one. |
 | `BRIDGE_JOB_NOT_FOUND` | That `job_id` does not belong to that wallet. |
 | `BRIDGE_SPONSOR_NOT_ALLOWED` | **Operational, not the user's fault.** The gas sponsor rejected the batch (403) because the CCTP rules are not deployed to the sponsor allowlist for this environment. **No USDC was burned.** Retrying will not help — report it. |
@@ -271,43 +357,49 @@ Exit codes follow the `deposit` convention: `0` for `COMPLETED` or a normal unfi
 ### supported_tokens - List supported deposit tokens
 
 ```bash
-tada deposit-tokens [network]
+amb deposit-tokens [network]
 ```
 
-Returns Path B (router whitelist) tokens supported for deposit, with the global MVL minimum required balance.
-- v2 model: the router holds an `address[]` whitelist (`router.supportedTokens()`). The minimum threshold is a single MVL-denominated ledger balance (`router.minRequiredBalance()`), not per-token.
+Lists every token that can be deposited as collateral on a network, with the global MVL minimum required balance. **This is the authoritative answer to "what can I deposit?" and the way to obtain a token address for `deposit-add`.**
+
 - If `network` is specified, shows tokens for that network only.
 - If omitted, shows all configured deposit networks.
 
-Output shape (`tada deposit-tokens BASE_SEPOLIA`):
+Output shape (`amb deposit-tokens ETHEREUM`):
 ```json
 {
   "networks": [
     {
-      "network": "BASE_SEPOLIA",
+      "network": "ETHEREUM",
       "tokens": [
-        { "token": "0x036C...", "symbol": "USDC", "name": "USD Coin", "decimals": 6 }
+        { "token": "0xA849...", "symbol": "MVL",  "name": "Mass Vehicle Ledger Token", "decimals": 18 },
+        { "token": "0xA0b8...", "symbol": "USDC", "name": "USD Coin",                  "decimals": 6  }
       ],
-      "minRequiredMvl": "10000000000000000000"
+      "minRequiredMvl": "40000000000000000000000"
     }
   ],
   "errors": []
 }
 ```
-- `minRequiredMvl`: raw wei units of MVL the agent ledger must hold for the deposit to be considered active.
-- `errors`: per-network RPC failures (the other networks still appear in `networks`).
+- `tokens`: MVL comes first — it is credited 1:1, so `minRequiredMvl` is the amount to send. The rest are convertible tokens, credited at the backend's quoted rate. `symbol`/`name`/`decimals` **may be `null`** when the metadata lookup failed; `token` (the address) is always present, and that is the field `deposit-add` needs.
+- `minRequiredMvl`: raw wei units of MVL the agent ledger must hold for the deposit to be considered active. **May be `null`** if that one read failed; the token list is still valid.
+- `errors`: failures, as `{ network, error }`. A network can appear in **both** `networks` and `errors` — a partial failure (one convertible token's metadata, or the threshold) does not remove the rest. Read `errors` before treating a short list as complete.
+
+If MVL itself cannot be resolved the whole network goes to `errors` instead, because a list that silently omits MVL would say "USDC only" about a chain that accepts MVL.
+
+Do not infer the list from anywhere else. The two kinds of token live in different places on-chain (MVL in the ledger's `mvlToken()`, the convertible tokens in the router's whitelist), and reading only one of them is how "MVL is not accepted" gets reported to users who could have deposited it.
 
 ### deposit_check - Check collateral balance
 
 ```bash
-tada deposit-status <wallet_address>
+amb deposit-status <wallet_address>
 ```
 
 Returns per-network collateral status. v2 model: a single MVL ledger balance (`deposited`) is compared against a global `minRequired` threshold; there is no per-token active flag.
 
 The top-level `anyActive` is `true` if **any network** has `isActive: true` (OR condition).
 
-Output shape (`tada deposit-status <wallet>`):
+Output shape (`amb deposit-status <wallet>`):
 ```json
 {
   "anyActive": false,
@@ -344,21 +436,35 @@ Output shape (`tada deposit-status <wallet>`):
 Each network entry also includes activation guidance:
 
 - `mvlGap`: MVL wei (string) still needed to reach `minRequired`; `"0"` when the threshold is already met.
-- `requiredToActivate`: best-effort array of `{ tokenAddress, symbol, tokenWei, ratePreview, display }` — how much of each supported convertible token (e.g. USDC) to deposit to activate. `display` is a human-readable string like `"~4.00 USDC to activate"`; `ratePreview` is a display-only USDC→MVL rate string, present only when a funding gap exists / the agent is not yet active. The field is `null` when the gap is `0` or the rate could not be fetched.
-- `requiredToActivateReason`: `null` | `"NO_JWT"` (no SIWE login — run `siwe-request-message` then `siwe-submit`) | `"RATE_UNAVAILABLE"` (rate service error / no supported tokens).
+- `requiredToActivate`: array of `{ tokenAddress, symbol, tokenWei, display, ratePreview? }` — each entry is one way to reach the minimum. `null` only when the gap is `0` (the agent is already active).
+  - The **MVL entry always comes first and is always present** while a gap exists. MVL is credited 1:1, so `tokenWei` is exactly the gap, `display` carries no `~` (e.g. `"40000 MVL to activate"`), and `ratePreview` is **absent** — there is no conversion to preview.
+  - Convertible entries (USDC, …) are best-effort: they need a SIWE JWT and the server rate endpoint. `display` is an estimate (`"~4.00 USDC to activate"`) and `ratePreview` is a display-only rate string.
+- `requiredToActivateReason`: `null` | `"NO_JWT"` (no SIWE login — run `siwe-request-message` then `siwe-submit`) | `"RATE_UNAVAILABLE"` (rate service error / no convertible tokens). **It describes the convertible-token half only.** A non-empty array alongside a non-null reason is normal and means "MVL is available; the converted options could not be computed" — do not read it as a total failure.
 - `requiredToActivateHint`: present only for `NO_JWT`; a one-line next-step string. Absent (or `null`) in all other cases.
 
-This data is best-effort: it requires a SIWE JWT and the server rate endpoint. Failure to fetch it never blocks the rest of `deposit-status` (chain reads always render).
+So a user who has not logged in yet still gets an actionable answer:
+
+```json
+"requiredToActivate": [
+  { "tokenAddress": "0xA849…", "symbol": "MVL", "tokenWei": "40000000000000000000000",
+    "display": "40000 MVL to activate" }
+],
+"requiredToActivateReason": "NO_JWT"
+```
+
+That path is genuinely usable without logging in: an MVL deposit needs no SIWE JWT, because it goes straight to the ledger rather than through the relay.
+
+Chain reads always render regardless — a rate-service failure never blocks the rest of `deposit-status`.
 
 ### deposit_token - Deposit token collateral
 
 ```bash
-tada deposit-add <wallet_address> <network> <token_address> <amount> [--no-wait]
+amb deposit-add <wallet_address> <network> <token_address> <amount> [--no-wait]
 ```
 
 - `wallet_address`: Wallet address (0x...)
 - `network`: Deposit network name (e.g. `BASE_SEPOLIA`, `ETHEREUM`)
-- `token_address`: Token contract address. The command picks a path automatically from the token: the network's **MVL token** takes **Path A** (direct deposit); **any other whitelisted convertible token** (e.g. USDC) takes **Path B** (gasless relay). List the convertible tokens for a network with `tada deposit-tokens <network>`; obtain the MVL address via the router's `router.mvlToken()` view.
+- `token_address`: Token contract address. **Run `amb deposit-tokens <network>` to get it** — that command lists every depositable token for the network, MVL included, with its address. The command then picks a path automatically from the token: the network's **MVL token** takes **Path A** (direct deposit); **any other whitelisted convertible token** (e.g. USDC) takes **Path B** (gasless relay).
 - `amount`: Raw units in the token's own decimals (MVL has 18 decimals → 1 MVL = "1000000000000000000"; USDC has 6 decimals → 1 USDC = "1000000").
 
 **Path A — MVL direct deposit:**
@@ -385,11 +491,11 @@ Success response:
 ```
 
 - `batch_tx.transaction_id`: Blockchain transaction identifier (not a user-operation hash).
-- To confirm the deposit landed, run `tada deposit-status <wallet_address>` (reads on-chain ledger state).
+- To confirm the deposit landed, run `amb deposit-status <wallet_address>` (reads on-chain ledger state).
 
 **Path B — Convertible token deposit (e.g. USDC), gasless relay:**
 
-When `token_address` is **not** the MVL token, the command routes the deposit through the agent-deposit relay: it fetches a backend-signed PriceQuote (token→MVL conversion), wraps an EIP-3009 `transferWithAuthorization` for the agent's Kernel smart account, and submits it via the relayer. No native gas is needed — the relayer pays. Requires a valid SIWE JWT (run `tada siwe-auth` first if the cached token is missing/expired).
+When `token_address` is **not** the MVL token, the command routes the deposit through the agent-deposit relay: it fetches a backend-signed PriceQuote (token→MVL conversion), wraps an EIP-3009 `transferWithAuthorization` for the agent's Kernel smart account, and submits it via the relayer. No native gas is needed — the relayer pays. Requires a valid SIWE JWT (run `amb siwe-auth` first if the cached token is missing/expired).
 
 > - **Credited as MVL** — the deposited token is converted to an MVL ledger credit at the backend's quoted rate. The blocking response includes `mvl_amount` (the quoted MVL credit, wei). A later `deposit-withdraw` returns MVL, not the token you deposited.
 
@@ -406,19 +512,23 @@ By default the command **blocks**, polling the relay until it reaches a terminal
 
 - `mvl_amount`: quoted MVL credit (wei) that will be credited on CONFIRMED.
 
-With `--no-wait` it returns immediately with the PENDING relay result (`{ "path": "relay", "request_id": "req_abc123", "status": "PENDING", "mvl_amount": "959000000000000000000" }`); poll it yourself with `tada deposit-relay-status <wallet_address> <request_id>` until `CONFIRMED` or `FAILED`.
+With `--no-wait` it returns immediately with the PENDING relay result (`{ "path": "relay", "request_id": "req_abc123", "status": "PENDING", "mvl_amount": "959000000000000000000" }`); poll it yourself with `amb deposit-relay-status <wallet_address> <request_id>` until `CONFIRMED` or `FAILED`.
 
-If the relay capability is not reachable (gateway down, or the token is not relay-supported on this network), the command fails with:
-```
-error: RELAY_UNAVAILABLE: token <token_address> is not MVL and the relay capability probe failed for <network>. Convertible-token deposit needs the agent-deposit relay endpoint reachable (check JWT + gateway).
-```
+When the relay cannot be used, the command fails with one of **two** codes. They look similar and are not interchangeable — the recovery is opposite, so read the code before advising anything:
 
-Either way, confirm the deposit landed with `tada deposit-status <wallet_address>` (reads the on-chain MVL ledger).
+| Code | What happened | Recovery |
+|---|---|---|
+| `RELAY_UNAVAILABLE` | The gateway could not be reached (down, non-2xx, unparseable). **Transient.** | Check the cached JWT and the gateway, then **retry**. |
+| `TOKEN_NOT_DEPOSITABLE` | The relay answered and has no capability for this token on this network — it cannot be used as collateral. **Permanent.** | **Retrying will not help.** Run `amb deposit-tokens <network>` and use a listed token. Both messages name the MVL address, which is always accepted and needs no relay. |
+
+Reporting the second as a connectivity problem sends the user to re-authenticate and check the gateway, neither of which can fix a wrong token address.
+
+Either way, confirm the deposit landed with `amb deposit-status <wallet_address>` (reads the on-chain MVL ledger).
 
 ### deposit_relay_status - Poll a gasless relay deposit
 
 ```bash
-tada deposit-relay-status <wallet_address> <request_id>
+amb deposit-relay-status <wallet_address> <request_id>
 ```
 
 - `request_id`: from a `deposit-add` response when `path: "relay"`.
@@ -427,7 +537,7 @@ tada deposit-relay-status <wallet_address> <request_id>
 ### withdraw - Withdraw collateral
 
 ```bash
-tada deposit-withdraw <wallet_address> <network>
+amb deposit-withdraw <wallet_address> <network>
 ```
 
 - `network`: Deposit network name (e.g. `BASE_SEPOLIA`, `ETHEREUM`).
@@ -442,7 +552,7 @@ v2 withdraws the **full MVL ledger balance** in one call — there is no token a
 error: WITHDRAW_COOLDOWN: next withdraw allowed at unix <ts> (~<N> min from now). v2 enforces a per-agent withdraw cooldown.
 ```
 
-Run `tada deposit-status <wallet_address>` to see the current `nextWithdrawAt`.
+Run `amb deposit-status <wallet_address>` to see the current `nextWithdrawAt`.
 
 **Success response:**
 ```json

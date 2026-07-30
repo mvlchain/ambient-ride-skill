@@ -76,7 +76,7 @@ The skill uses [Privy](https://privy.io), an embedded-wallet provider that split
 
 - **The skill never stores a raw private key on disk.** Anywhere.
 - Instead, the skill holds a local **quorum key** — a credential that authorises the skill to ask Privy to co-sign on your behalf. The quorum key alone cannot sign anything; signing requires both the local quorum key *and* Privy's side together.
-- The quorum key lives in `TADA_AGENT_KEYS_DIR` (default `~/.tada-ride-agent/keys`) and is bound to your local agent installation.
+- The quorum key lives in `~/.amb/keys` (or the `AMB_RIDE_STATE_DIR` equivalent) and is bound to your local agent installation.
 - **If you delete the keys directory, this machine loses the ability to ask Privy to sign for that wallet.** The wallet still exists on Privy's side, but you would need to recover access through Privy's normal flow rather than from this skill alone. Treat the keys directory like an SSH key folder — back it up if you care about the wallet.
 
 ---
@@ -122,7 +122,7 @@ USDC is a USD-pegged stablecoin available across the chains TADA/Throo supports.
 The deposit is a **separate, one-time eligibility step** — not a prepaid fare balance. TADA/Throo requires registered users to stake some collateral (USDC or MVL token) into its on-chain deposit contract before they can request rides. Per-ride fares are paid separately at the end of each ride out of your wallet's USDC balance, and **do not** draw from the deposit. Your collateral stays in the deposit contract and can be withdrawn whenever you want.
 
 **Can I deposit something other than USDC as collateral?**
-Yes — both USDC and the MVL token are accepted. Run the `deposit-tokens.js` command to see the current list of supported deposit tokens and their on-chain addresses.
+Yes — both USDC and the MVL token are accepted. Run `amb deposit-tokens <network>` to see the current list of depositable tokens and their on-chain addresses. MVL is credited 1:1, so the amount you send is exactly the amount required; USDC is converted at the backend's quoted rate.
 
 **If I deposit USDC, do I get USDC back when I withdraw?**
 No. Collateral is held as an **MVL credit** regardless of the token you deposit — a USDC deposit is converted to MVL at deposit time (at the backend's quoted rate), and `deposit-withdraw` returns that balance as the **MVL token**, not USDC.
@@ -141,7 +141,7 @@ SIWE = Sign-In With Ethereum. It is a way to prove ownership of a wallet to a ba
 **Where is my private key stored?**
 There is no single "your private key" — Privy uses a split-signing model. The skill stores a local **quorum key** that lets it co-sign with Privy. See *How wallets work in this skill*.
 
-**What is `TADA_AGENT_PASSPHRASE`?**
+**What is `AMB_RIDE_PASSPHRASE`?**
 A passphrase the install script generates and stores in your local agent config. The skill uses it to encrypt the local database and any sensitive material kept on disk. **If you lose it, you lose access to that local state** — you will need to re-run wallet setup. Treat it like a password.
 
 **What data leaves my machine and where does it go?**
@@ -152,7 +152,7 @@ The skill only talks to **TADA-operated servers**. Two logical surfaces:
 That's it. The skill does not call third parties for analytics or tracking.
 
 **How do I uninstall and remove all my data?**
-Remove the skill directory, then delete the data and key directories — by default `~/.tada-ride-agent/data` and `~/.tada-ride-agent/keys` (or whatever you set `TADA_AGENT_DATA_DIR` / `TADA_AGENT_KEYS_DIR` to).
+Remove the skill directory, then delete the Ambient state root — by default `~/.amb` (or the path set with `AMB_RIDE_STATE_DIR`).
 
 ⚠️ **Important:** the keys directory holds your **quorum key for the embedded Privy wallet**. Deleting it means this machine can no longer ask Privy to sign for that wallet. The wallet still exists on Privy's side, but you would need to go through Privy's recovery flow to use it again. If you want to keep the wallet usable, back up the keys directory before deleting.
 
