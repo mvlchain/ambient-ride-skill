@@ -29,43 +29,98 @@ All runtime state (wallet keys, encrypted passphrase, ride DB) lives in `~/.amb/
 
 ## Install
 
-Pick the install location for your agent and run:
+Ambient Ride ships through two package registries — pick the one matching your agent.
 
-### Claude Code (user-level)
+### Claude Code — via Claude Marketplace (recommended)
 
 ```bash
-git clone https://github.com/mvlchain/ambient-ride-skill.git ~/.claude/skills/ride
-node ~/.claude/skills/ride/scripts/install.js
+claude plugin marketplace add mvlchain/ambient-ride-plugin
+claude plugin install ride@ambient-ride
 ```
 
-Restart Claude Code after the install script finishes.
+Then, in any project, run `/ride:setup`. Installing a plugin only copies files —
+Claude Code has no install-time hook — so `/ride:setup` is what installs the `amb`
+CLI the skill drives. You can also skip it and just mention a ride; the skill
+installs the CLI on first load.
 
-For the Claude Marketplace dev channel, the canonical local marketplace clone is
-`~/Project/easi6/ambient-ride-plugin-dev`, backed by
-`mvlchain/ambient-ride-plugin-dev`. The public production Marketplace remains
-`mvlchain/ambient-ride-plugin`. Install `ride@ambient-ride`, then run
-`/ride:setup`. Operators can verify the source build and CLI → skill → plugin
-deployment plan with `scripts/deploy-dev.sh --dry-run`; dry-run never mutates a
-target repository.
+Both commands install user-level by default. To scope the install to one project
+instead, pass `--scope project` to each — it records the marketplace and plugin in
+that project's `.claude/settings.json`, so the repo carries them:
 
-### Claude Code (project-level)
+```bash
+claude plugin marketplace add mvlchain/ambient-ride-plugin --scope project
+claude plugin install ride@ambient-ride --scope project
+```
 
+`--scope local` keeps the same declaration to your own checkout instead.
+
+> **Internal/dev channel** (MVL operators only): the canonical local marketplace
+> clone is `~/Project/easi6/ambient-ride-plugin-dev`, backed by
+> `mvlchain/ambient-ride-plugin-dev`. Verify the source build and CLI → skill →
+> plugin deployment plan with `scripts/deploy-dev.sh --dry-run`; dry-run never
+> mutates a target repository.
+
+### OpenClaw — via ClawHub (recommended)
+
+```bash
+openclaw skills install @ambprotocol/ride
+```
+
+ClawHub classifies this release as `review-required`, so the command above stops
+with a warning instead of installing. Install with the acknowledgement:
+
+```bash
+openclaw skills install @ambprotocol/ride --acknowledge-clawhub-risk
+```
+
+In a terminal you can type the package name at the prompt instead of passing the
+flag. This is not a malware verdict — OpenClaw refuses those outright and never
+downloads them. The [security audit](https://clawhub.ai/ambprotocol/skills/ride/security-audit)
+is public; it is worth reading, because this skill can spend your money.
+
+Restart the gateway:
+```bash
+openclaw gateway restart
+```
+
+Installing only unpacks the bundle — OpenClaw has no post-install hook — so the
+skill installs the `amb` CLI itself on first use.
+
+Useful flags: `--version <version>` pins a published version, `--global` installs
+into the shared managed skills directory instead of the agent workspace, and
+`--agent <id>` targets a specific agent workspace.
+
+### Other agents, or a pinned/manual install
+
+Clone the skill bundle directly and run its installer when a registry install does
+not fit — for example:
+
+- you run an agent with no registry of its own (Codex, Hermes, ...), which loads a
+  skill from a plain directory;
+- you need a specific commit rather than the latest published version.
+
+(A project-scoped Claude Code install does **not** need this — use `--scope project`
+above.)
+
+**Claude Code (local checkout)**
 ```bash
 git clone https://github.com/mvlchain/ambient-ride-skill.git .claude/skills/ride
 node .claude/skills/ride/scripts/install.js
 ```
 
-### OpenClaw
-
+**OpenClaw (manual)**
 ```bash
 git clone https://github.com/mvlchain/ambient-ride-skill.git ~/.openclaw/skills/ride
 node ~/.openclaw/skills/ride/scripts/install.js
 ```
 
-After install completes, restart the gateway:
+**Any other agent**
 ```bash
-openclaw gateway restart
+git clone https://github.com/mvlchain/ambient-ride-skill.git <your-agent-skills-dir>/ride
+node <your-agent-skills-dir>/ride/scripts/install.js
 ```
+
+After install completes, restart the agent/runtime so it picks up the new skill.
 
 ## What `install.js` does
 
@@ -100,9 +155,9 @@ On success, stdout emits a single-line JSON: `{"status":"installed" | "already_i
 
 ## Requirements
 
-- Node.js 18 or newer
+- Node.js 22.22.0 or newer (`>=22.22.0`); contributors should use the pinned 22.22.0 runtime via `.node-version` or `nvm install 22.22.0 && nvm use 22.22.0`
 - `npm` (ships with Node — git builds invoke `npm install --omit=dev` inside `~/.amb/cli/`; npm builds invoke `npm i -g @ambprotocol/ride-cli@latest`)
-- `git` — needed to clone this skill bundle itself; git builds additionally use it to clone `mvlchain/ambient-ride-cli` (npm builds don't)
+- `git` — needed to clone this skill bundle for a manual/project-scoped install, and by Claude Code to fetch the plugin marketplace repository; git builds additionally use it to clone `mvlchain/ambient-ride-cli` (npm builds don't)
 - The `amb` binary must end up on `$PATH`:
   - **git builds**: `~/.local/bin` must be on `$PATH` — usually automatic on modern Linux/macOS; otherwise add `export PATH="$HOME/.local/bin:$PATH"` to your shell profile and open a new shell
   - **npm builds**: npm's global bin dir (`npm config get prefix` + `/bin`) must be on `$PATH` — normally automatic for any working npm install; otherwise add it to your shell profile and open a new shell
@@ -111,7 +166,7 @@ If `better-sqlite3` install fails (corporate proxy / missing build tools):
 - If the prebuilt binary cannot be downloaded, build from source: install `apt install build-essential python3` on Linux, Xcode Command Line Tools on macOS, or Visual Studio Build Tools on Windows, then re-run `install.js`.
 - Or set an internal mirror: `npm config set better_sqlite3_binary_host_mirror <internal_mirror>` then retry.
 
-For ABI mismatch (`Error: ... NODE_MODULE_VERSION`): make sure Node ≥ 18 is active (`node --version`), then `rm -rf ~/.amb/cli && node <SKILL_DIR>/scripts/install.js` (re-clone + re-install).
+For ABI mismatch (`Error: ... NODE_MODULE_VERSION`): make sure a supported Node.js version is active (`node --version`), then `rm -rf ~/.amb/cli && node <SKILL_DIR>/scripts/install.js` (re-clone + re-install). `~/.amb/cli` holds only the CLI itself — your database, keys, and passphrase live under `~/.amb/state/`, which this leaves untouched.
 
 If `npm i -g @ambprotocol/ride-cli` fails with `EACCES`, npm's global prefix is not writable by your user. Do **not** re-run it under `sudo`: the CLI deliberately skips state initialisation when it detects a sudo invocation (it reports `status: "skipped_sudo"`), because root-owned `~/.amb` state would lock you out of your wallet keys. Point npm at a user-writable prefix instead (`npm config set prefix ~/.local`) and make sure that prefix's `bin` directory is on your `$PATH`.
 
@@ -121,18 +176,46 @@ When `install.js` fails it exits non-zero and writes a single-line JSON to stder
 
 | Code | Meaning | Recovery |
 |---|---|---|
-| `SSH_KEY_MISSING` | `git clone` of `mvlchain/ambient-ride-cli` failed (SSH auth rejected, or repo not reachable) | Register your GitHub SSH key (`ssh-add ~/.ssh/id_*`); verify access to the `mvlchain` org with `ssh -T git@github.com`; then re-run `install.js`. |
+| `SSH_KEY_MISSING` | (git builds only) `git clone`/`fetch` failed with an SSH public-key rejection (`Permission denied (publickey)`) | Register your GitHub SSH key (`ssh-add ~/.ssh/id_*`); verify access to the `mvlchain` org with `ssh -T git@github.com`; then re-run `install.js`. |
 | `SYMLINK_FAILED` | Cannot write to `~/.local/bin/amb` | `mkdir -p ~/.local/bin` then check write permission (`ls -la ~/.local/bin`); re-run `install.js`. |
 | `PATH_MISSING` | `amb` did not resolve on `$PATH` after install. **git builds**: `~/.local/bin` is not on `$PATH`. **npm builds**: npm's global bin dir (`npm config get prefix` + `/bin`) is not on `$PATH` | **git builds**: add `export PATH="$HOME/.local/bin:$PATH"` to your shell profile (`.bashrc` / `.zshrc` / `.profile`). **npm builds**: add npm's global bin dir instead — run `npm config get prefix`, append `/bin`, and add `export PATH="<that dir>:$PATH"` to your shell profile. Either way, open a new shell, then re-run `install.js`. |
 | `SHA_MISMATCH` | `amb --version`'s `git_sha` doesn't match the sha baked into this skill bundle, even after one `git fetch + reset --hard` retry | The skill bundle expects a newer CLI than what `mvlchain/ambient-ride-cli` has on its dev/staging branch — usually a transient state during a deploy. Wait a moment and re-run; if it persists, the CLI push lagged or failed and needs operator attention. |
 | `VERSION_MISMATCH` | (`'npm'` mode only) `amb --version`'s `version` is below the baked minimum CLI version after one `npm i -g` retry | Run `npm i -g @ambprotocol/ride-cli@latest` manually and re-run `install.js`. If it still fails, your npm prefix may differ — check `npm config get prefix` and verify the registered `amb` binary. |
-| `AMB_INSTALL_FAILED` | One of three sub-failures (the `message` field disambiguates): (a) `npm install --omit=dev failed: ...` — git builds: native deps did not install, (b) `npm install failed: ...` — npm builds: `npm i -g @ambprotocol/ride-cli` failed, or (c) `amb install` child process exited non-zero — state init failed | (a) See the `better-sqlite3` notes in **Requirements** above. (b) Check network/registry access and npm auth, then retry `npm i -g @ambprotocol/ride-cli@latest`. (c) The child's stderr is passed through in `message`; act on that. Re-run `install.js` once the underlying issue is fixed. |
+| `AMB_INSTALL_FAILED` | The `message` field disambiguates: the Node.js runtime is older than 22.22.0, native dependencies did not install, the global npm install failed, `amb install` exited non-zero, or a `git clone`/`fetch` failed for a reason other than an SSH key rejection | Read the `message`: it carries git's own stderr verbatim, including the remedy git suggests (for example `git config --global --add safe.directory <path>` on an ownership mismatch). Otherwise upgrade Node.js when the message reports an unsupported runtime, or check the reported npm/network/native dependency error, then run the installer again. |
 
 `install.js` is idempotent. After fixing the underlying issue, simply re-run it.
 
 ## Updating the skill
 
-To pick up a newer version of the skill:
+**Claude Marketplace**: use the fully qualified id (the short name `ride` fails with
+`Plugin "ride" not found`):
+
+```bash
+claude plugin update ride@ambient-ride
+```
+
+Restart Claude Code afterwards — the CLI says so, and it is required for the new bundle
+to load. If you installed with `--scope project` (or `local`), pass the same scope here:
+`claude plugin update ride@ambient-ride --scope project`.
+
+**ClawHub**: use `skills update` — a plain `skills install` will not overwrite an
+already-installed skill (that needs `--force`).
+
+```bash
+openclaw skills update @ambprotocol/ride --acknowledge-clawhub-risk
+```
+
+`skills update` runs the same verdict check as `skills install`, so it needs the
+same acknowledgement — in a terminal you can answer the prompt instead.
+
+```bash
+openclaw skills update --all --acknowledge-clawhub-risk
+```
+
+updates every tracked ClawHub skill. Add `--global` if you installed into the
+shared managed skills directory.
+
+**Pinned/manual install** (see "Other agents, or a pinned/manual install" above):
 
 ```bash
 cd <install_dir>
@@ -191,15 +274,18 @@ All skill runtime state lives under `~/.amb/` — independent of the skill insta
 
 ```
 ~/.amb/
-├── data/
-│   ├── ambient-ride.db    SQLite (wallet metadata, ride state, dedup, ...)
-│   └── .env                  AMB_RIDE_PASSPHRASE (created/preserved by install.js)
-└── keys/
-    └── <wallet_id>_private.enc, <wallet_id>_public.pem
+└── state/
+    ├── data/
+    │   ├── ambient-ride.db   SQLite (wallet metadata, ride state, saved places, ...)
+    │   └── .env              AMB_RIDE_PASSPHRASE (created/preserved by install.js)
+    └── keys/
+        └── <wallet_id>_private.enc, <wallet_id>_public.pem
                               Encrypted Privy keys (decryptable only with the passphrase)
 ```
 
-To use the same wallets from a different location, `cp -r ~/.amb /target/.amb` is enough (`k_i_key_path` is stored as a relative path, so there are no absolute-path conflicts).
+⚠️ **This directory is wallet material.** The passphrase sits beside the keys it decrypts, so whoever can read the directory can move your funds. Treat it the way you would treat a password manager's data file: do not put it in a shared folder, a synced drive, or a repository, and do not paste it into a chat.
+
+The same layout is what makes a wallet portable, so `cp -r ~/.amb /target/.amb` does move it (`k_i_key_path` is a relative path, so there are no absolute-path conflicts) — but that copy carries the keys and the passphrase with it. Copy it only to a machine you control, and delete the copy when you are done with it.
 
 Old locations (`~/.tada-ride-agent/`, `<SKILL_DIR>/.tada-state/`) are auto-migrated on the first `loadConfig()` call (backup-first, idempotent).
 
@@ -209,11 +295,12 @@ The defaults work without any env vars. Only override in special cases.
 
 | Env var | Default | Purpose |
 |---|---|---|
-| `AMB_RIDE_STATE_DIR` | `~/.amb` | State root containing `data/`, `keys/`, `run/`, and `debug/`. |
+| `AMB_RIDE_STATE_DIR` | `~/.amb` | State root. Holds the local database and wallet keys (under `state/`) plus runtime and diagnostic files. |
 | `AMB_RIDE_PASSPHRASE` | (generated by `install.js`) | Wallet-key encryption passphrase. If you move state without moving this, the keys can no longer be decrypted. |
 | `AMB_RIDE_LOG_LEVEL` | `info` | Runtime log verbosity. |
 | `AMB_RIDE_OPENCLAW_CLI` | `openclaw` | OpenClaw executable override. |
 | `AMB_RIDE_RPC_URL_<NETWORK>` | build default | Per-network RPC override (for example, `AMB_RIDE_RPC_URL_BASE_SEPOLIA`). |
+| `AMB_TELEMETRY_SERVICE_URL` | baked build URL | Development-only proxy override for telemetry E2E/local service checks. Staging and production reject a different endpoint. |
 
 ## Repository layout
 
