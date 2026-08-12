@@ -797,7 +797,9 @@ function renderPrompt(ev) {
   }
   const eta = ev.payload["etaMin"];
   const driverPart = renderDriver(ev.payload["driver"]);
-  return `${brand} ride ${ev.rideId} is ${phrase}${driverPart}${eta ? `, pickup ~${eta}min` : ""}. Tell the user briefly. No unrelated questions.`;
+  const share = ev.payload["rideShareUrl"];
+  const sharePart = share ? ` Live tracking: ${share} \u2014 include it as a markdown link.` : "";
+  return `${brand} ride ${ev.rideId} is ${phrase}${driverPart}${eta ? `, pickup ~${eta}min` : ""}. Tell the user briefly.${sharePart} No unrelated questions.`;
 }
 
 // src/scripts/_internal/deliver-fastpath.ts
@@ -899,6 +901,24 @@ function makeTracedLegacyDeliver(legacy, trace, now) {
 import { spawn as nodeSpawn } from "child_process";
 import path5 from "path";
 import fs4 from "fs";
+var RelaySpawnError = class extends Error {
+  code = "RELAY_CLI_SPAWN_FAILED";
+  ambCmd;
+  spawnCode;
+  constructor(ambCmd, cause) {
+    super(`failed to spawn '${ambCmd}': ${cause.code ?? cause.message}`, { cause });
+    this.name = "RelaySpawnError";
+    this.ambCmd = ambCmd;
+    this.spawnCode = cause.code;
+  }
+};
+function isRelaySpawnError(e) {
+  return e instanceof RelaySpawnError;
+}
+var PERMANENT_SPAWN_CODES = /* @__PURE__ */ new Set(["ENOENT", "EACCES", "EPERM", "ENOTDIR"]);
+function isPermanentSpawnFailure(e) {
+  return e.spawnCode !== void 0 && PERMANENT_SPAWN_CODES.has(e.spawnCode);
+}
 function writeCursorAtomic(file, seq) {
   fs4.mkdirSync(path5.dirname(file), { recursive: true });
   const tmp = `${file}.tmp.${process.pid}`;
@@ -908,15 +928,20 @@ function writeCursorAtomic(file, seq) {
 function runRelayLoop(o) {
   const spawn = o.spawn ?? nodeSpawn;
   const ambCmd = o.ambCmd ?? "amb";
-  const child = spawn(ambCmd, [
-    "events",
-    "--ride",
-    o.rideId,
-    "--cursor-file",
-    o.cursorFile,
-    "--follow",
-    "--prompt"
-  ], { stdio: ["ignore", "pipe", "inherit"] });
+  let child;
+  try {
+    child = spawn(ambCmd, [
+      "events",
+      "--ride",
+      o.rideId,
+      "--cursor-file",
+      o.cursorFile,
+      "--follow",
+      "--prompt"
+    ], { stdio: ["ignore", "pipe", "inherit"] });
+  } catch (err) {
+    return Promise.reject(new RelaySpawnError(ambCmd, err));
+  }
   let sawTerminal = false;
   const oneShot = o.oneShot ?? false;
   let firstDelivered = false;
@@ -973,11 +998,17 @@ function runRelayLoop(o) {
     if (o.signal.aborted) killChild();
     else o.signal.addEventListener("abort", killChild, { once: true });
   }
-  return new Promise((resolve) => {
-    let exited = false;
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    child.on("error", (err) => {
+      if (settled) return;
+      settled = true;
+      o.signal?.removeEventListener("abort", killChild);
+      reject(new RelaySpawnError(ambCmd, err));
+    });
     child.on("exit", (code) => {
-      if (exited) return;
-      exited = true;
+      if (settled) return;
+      settled = true;
       o.signal?.removeEventListener("abort", killChild);
       const tail = buf;
       buf = "";
@@ -1117,13 +1148,44 @@ function isMainModule(importMetaUrl) {
 // src/scripts/ride-relay.ts
 var DEFAULT_BACKOFF_MS = 500;
 var DRAIN_CAP_MS = 6e5;
+function spawnFailureMessage(e) {
+  const prefix = `could not run '${e.ambCmd}' (${e.spawnCode ?? "spawn failed"})`;
+  if (e.spawnCode === "ENOENT") {
+    return `${prefix} \u2014 the Ambient CLI is not on this process's PATH. Install it with \`node scripts/install.js\`, or make sure \`${e.ambCmd}\` resolves for the process that starts the relay.`;
+  }
+  if (e.spawnCode === "EACCES" || e.spawnCode === "EPERM") {
+    return `${prefix} \u2014 the Ambient CLI was found but this process has no permission to execute it. Check the file permissions on \`${e.ambCmd}\`.`;
+  }
+  if (e.spawnCode === "ENOTDIR") {
+    return `${prefix} \u2014 a PATH entry is a file rather than a directory, so \`${e.ambCmd}\` could never be looked up. Check PATH for a malformed entry.`;
+  }
+  return `${prefix} \u2014 the CLI could not be started. This is usually temporary resource exhaustion on the host.`;
+}
+function reportSpawnFailure(e) {
+  process.stderr.write(JSON.stringify({
+    error: e.code,
+    message: spawnFailureMessage(e)
+  }) + "\n");
+  return 1;
+}
+function noteTransientSpawnFailure(e) {
+  process.stderr.write(JSON.stringify({
+    note: "RELAY_CLI_SPAWN_RETRY",
+    message: `${spawnFailureMessage(e)} Retrying.`
+  }) + "\n");
+}
 async function runRideRelay(rideId, deps) {
   const kind = selectDeliver();
   if (kind === "stdout") {
     const cursorFile2 = path8.join(stateRoot(), "cursors", `stdout-${rideId}`);
     fs7.mkdirSync(path8.dirname(cursorFile2), { recursive: true });
-    const r = await deps.runRelayLoop({ rideId, cursorFile: cursorFile2, deliver: deliverStdout, oneShot: deps.oneShot });
-    return r.exitCode;
+    try {
+      const r = await deps.runRelayLoop({ rideId, cursorFile: cursorFile2, deliver: deliverStdout, oneShot: deps.oneShot });
+      return r.exitCode;
+    } catch (e) {
+      if (isRelaySpawnError(e)) return reportSpawnFailure(e);
+      throw e;
+    }
   }
   if (deps.oneShot) {
     process.stderr.write(JSON.stringify({
@@ -1260,7 +1322,20 @@ async function runRideRelay(rideId, deps) {
   });
   try {
     for (; ; ) {
-      const r = await deps.runRelayLoop({ rideId, cursorFile, deliver, signal: controller.signal });
+      let r;
+      try {
+        r = await deps.runRelayLoop({ rideId, cursorFile, deliver, signal: controller.signal });
+      } catch (e) {
+        if (isRelaySpawnError(e)) {
+          if (isPermanentSpawnFailure(e)) return reportSpawnFailure(e);
+          if (controller.signal.aborted) return 0;
+          noteTransientSpawnFailure(e);
+          if (backoff > 0) await new Promise((res) => setTimeout(res, backoff));
+          if (controller.signal.aborted) return 0;
+          continue;
+        }
+        throw e;
+      }
       if (r.sawTerminal) {
         if (pipeline?.injectQueue) await pipeline.injectQueue.drain(DRAIN_CAP_MS);
         return 0;
@@ -1327,7 +1402,6 @@ if (isMainModule(import.meta.url)) {
   process.exit(code);
 }
 export {
-  defaultAcquireLockAdapter,
   makeAcquireLockAdapter,
   runRideRelay
 };

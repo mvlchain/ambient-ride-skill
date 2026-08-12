@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 // <define:__AMB_INSTALL_BUILD_CONFIG__>
-var define_AMB_INSTALL_BUILD_CONFIG_default = { mode: "npm", repoBranch: "main", expectedCliSha: "2c401ca5", minimumCliVersion: "1.3.0" };
+var define_AMB_INSTALL_BUILD_CONFIG_default = { mode: "npm", repoBranch: "main", expectedCliSha: "5f5c98b8", minimumCliVersion: "1.3.0" };
 
 // src/scripts/install.ts
 import os2 from "os";
@@ -14,18 +14,64 @@ import path from "path";
 import { execFileSync as nodeExecFileSync } from "child_process";
 import os from "os";
 import { randomBytes } from "crypto";
+
+// src/lib/install/git-failure.ts
+var GIT_STDERR_LIMIT = 2e3;
+var SSH_KEY_REJECTION = /Permission denied \(publickey/i;
+var GitCommandError = class extends Error {
+  command;
+  stderr;
+  sshKeyRejection;
+  constructor(command, stderr, options) {
+    const sshKeyRejection = isSshKeyRejection(stderr);
+    const truncated = stderr.slice(0, GIT_STDERR_LIMIT);
+    super(`${command} failed: ${truncated}`, options);
+    this.name = "GitCommandError";
+    this.command = command;
+    this.stderr = truncated;
+    this.sshKeyRejection = sshKeyRejection;
+  }
+};
+function isSshKeyRejection(stderr) {
+  return SSH_KEY_REJECTION.test(stderr);
+}
+function stderrTextOf(e) {
+  const stderr = e?.stderr;
+  if (typeof stderr === "string" && stderr.length > 0) return stderr;
+  if (e instanceof Error) return e.message;
+  return String(e);
+}
+function describeGitFailure(e) {
+  if (e instanceof GitCommandError) {
+    return { command: e.command, stderr: e.stderr, sshKeyRejection: e.sshKeyRejection };
+  }
+  const full = stderrTextOf(e);
+  return { command: "install", stderr: full.slice(0, GIT_STDERR_LIMIT), sshKeyRejection: isSshKeyRejection(full) };
+}
+
+// src/lib/install/cli-bootstrap.ts
+function runGit(deps, command, args) {
+  try {
+    deps.execSync("git", args);
+  } catch (e) {
+    const stderr = stderrTextOf(e);
+    process.stderr.write(stderr.endsWith("\n") ? stderr : `${stderr}
+`);
+    throw new GitCommandError(command, stderr, { cause: e });
+  }
+}
 function ensureCliClone(opts) {
   const deps = opts.deps ?? {
-    execSync: (file, args) => nodeExecFileSync(file, args, { encoding: "utf8", stdio: ["ignore", "pipe", "inherit"] })
+    execSync: (file, args) => nodeExecFileSync(file, args, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] })
   };
   const gitDir = path.join(opts.cliDir, ".git");
   if (fs.existsSync(gitDir)) {
-    deps.execSync("git", ["-C", opts.cliDir, "fetch"]);
-    deps.execSync("git", ["-C", opts.cliDir, "reset", "--hard", `origin/${opts.branch}`]);
+    runGit(deps, "git fetch", ["-C", opts.cliDir, "fetch"]);
+    runGit(deps, "git reset --hard", ["-C", opts.cliDir, "reset", "--hard", `origin/${opts.branch}`]);
     return;
   }
   fs.mkdirSync(path.dirname(opts.cliDir), { recursive: true });
-  deps.execSync("git", ["clone", "-b", opts.branch, opts.repoUrl, opts.cliDir]);
+  runGit(deps, "git clone", ["clone", "-b", opts.branch, opts.repoUrl, opts.cliDir]);
 }
 var BOOTSTRAP_PREFIX = ".amb-cli-bootstrap-";
 var OWNER_CLAIM = ".owner-claim.json";
@@ -467,6 +513,23 @@ function writeFatalError(error, message) {
   process.stderr.write(JSON.stringify({ error, message: flat }) + "\n");
 }
 
+// src/lib/install/node-version.ts
+var MINIMUM_NODE_VERSION = "22.22.0";
+function supportsNodeVersion(version) {
+  const match = /^v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$/.exec(version);
+  if (!match) return false;
+  const major = Number(match[1]);
+  const minor = Number(match[2]);
+  const patch = Number(match[3]);
+  const prerelease = match[4];
+  if (major !== 22) return major > 22;
+  if (minor !== 22) return minor > 22;
+  return patch > 0 || patch === 0 && prerelease === void 0;
+}
+function unsupportedNodeVersionMessage(version) {
+  return `Node.js ${MINIMUM_NODE_VERSION} or newer is required; found ${version}. Upgrade Node.js and run the installer again.`;
+}
+
 // src/scripts/install.ts
 import { execFileSync as nodeExecFileSync2, spawnSync as nodeSpawnSync2 } from "child_process";
 
@@ -495,6 +558,7 @@ var SYMLINK_DIR = "~/.local/bin";
 var SYMLINK_TARGET = "amb";
 function defaultDeps() {
   return {
+    nodeVersion: process.versions.node,
     createCliBootstrap,
     ensureCliClone,
     beginCliPromotion,
@@ -549,8 +613,22 @@ function expandHome(p) {
   if (p.startsWith("~/")) return path2.join(process.env["HOME"] ?? os2.homedir(), p.slice(2));
   return p;
 }
+function reportGitFailure(e) {
+  const failure = describeGitFailure(e);
+  writeFatalError(
+    failure.sshKeyRejection ? "SSH_KEY_MISSING" : "AMB_INSTALL_FAILED",
+    `${failure.command} failed: ${failure.stderr}`
+  );
+}
 async function runInstall(depsOverride) {
   const deps = depsOverride ?? defaultDeps();
+  if (!supportsNodeVersion(deps.nodeVersion)) {
+    writeFatalError(
+      "AMB_INSTALL_FAILED",
+      unsupportedNodeVersionMessage(deps.nodeVersion)
+    );
+    return 1;
+  }
   const install = ambInstallBuildConfig();
   const mode = install.mode;
   const branch = install.repoBranch;
@@ -570,15 +648,6 @@ async function runInstall(depsOverride) {
       deps.cleanupCliBootstrap(stagedCliDir, ambientRoot);
     } catch (cleanupError) {
       process.stderr.write(`[amb-install] bootstrap cleanup failed: ${cleanupError.message}
-`);
-    }
-  };
-  const rollbackPromotion = () => {
-    if (!promotion) return;
-    try {
-      deps.rollbackCliPromotion(promotion);
-    } catch (rollbackError) {
-      process.stderr.write(`[amb-install] promotion rollback failed: ${rollbackError.message}
 `);
     }
   };
@@ -623,7 +692,7 @@ async function runInstall(depsOverride) {
         deps.ensureCliClone({ cliDir: stagedCliDir, branch, repoUrl });
       } catch (e) {
         cleanupStaging();
-        writeFatalError("SSH_KEY_MISSING", `git clone failed: ${e.message}`);
+        reportGitFailure(e);
         return 1;
       }
     }
@@ -687,6 +756,10 @@ async function runInstall(depsOverride) {
     });
   } catch (e) {
     if (!promotion) cleanupStaging();
+    if (e instanceof GitCommandError) {
+      reportGitFailure(e);
+      return 1;
+    }
     writeFatalError("SHA_MISMATCH", `amb --version unparseable or spawn failed: ${e.message}`);
     return 1;
   }

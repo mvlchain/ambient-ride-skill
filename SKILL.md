@@ -1,6 +1,6 @@
 ---
 name: ride
-version: 1.0.0
+version: 1.1.0
 description: Ambient Ride skill for TADA/Throo ride-hailing and taxi service. Wallet, deposit, collateral, ride, payment, chat, and tipping workflows.
 metadata:
   openclaw:
@@ -15,6 +15,9 @@ metadata:
       - name: AMB_RIDE_OPENCLAW_CLI
         required: false
         description: Path to the openclaw CLI used for ride event delivery.
+      - name: AMB_TELEMETRY_SERVICE_URL
+        required: false
+        description: Development-only telemetry proxy override for local E2E; staging and production keep the baked endpoint.
     install:
       - kind: node
         package: "@ambprotocol/ride-cli"
@@ -85,8 +88,8 @@ test -s "${AMB_RIDE_STATE_DIR:-$HOME/.amb}/state/data/.installed"
 
 After installation is confirmed, determine onboarding state with `amb whoami` (JSON) and continue with the matching branch:
 
-- If `mode` is `tada` or `wallet`, onboarding is already done — proceed. **But `mode: tada` alone does NOT mean the member is signed in** — it only means a member account is registered on this machine. Check the `authenticated` field: if `authenticated` is **`false`** (`auth_state: "needs_login"`), the session is not usable (expired/not finished) — do **not** proceed as logged-in. Tell the user their TADA/Throo session isn't active and run `amb login --no-wait` (sign-in flow below) before any member action. Re-entering a 4-digit code from an earlier attempt won't work (that code has expired) — always start a fresh `amb login`. When `authenticated` is `true` (`auth_state: "active"`), the session is usable (a live token, or a refresh that renews automatically) — proceed.
-- If `mode` is `null` (onboarding) and `member_available` is **`true`**, ask the user which account to use:
+- If `mode` is `tada` or `wallet`, onboarding is already done — proceed. **But `mode: tada` alone does NOT mean the member is signed in** — it only means a member account is registered on this machine. Check the `authenticated` field: if `authenticated` is **`false`** (`auth_state: "needs_login"`), the session is not usable (expired/not finished) — do **not** proceed as logged-in. Tell the user their TADA/Throo session isn't active and run `amb login --no-wait` (sign-in flow below) before any member action. Re-entering a 4-digit code from an earlier attempt won't work (that code has expired) — always start a fresh `amb login`. When `authenticated` is `true` (`auth_state: "active"`), the session is usable (a live token, or a refresh that renews automatically) — proceed. Additionally, if `mode` is `tada` and `has_wallet` is **`false`** (an existing member from before wallet provisioning shipped), you may offer to provision their wallet now with the **Wallet setup** flow below — but this is **optional**: the member can skip and continue, and you must **not** block ride actions on it.
+- If `mode` is `null` (onboarding), **provision a wallet first, then choose a mode.** Every agent holds a wallet regardless of mode — it does not change ride pricing or payment. First run the **Wallet setup** flow below to provision it. Then, once the wallet is ready and `member_available` is **`true`**, ask the user which mode to use — this choice drives ride **pricing** and backend (member and crypto are priced differently), so keep it explicit:
   - **A. TADA/Throo member account** — sign in with the TADA/Throo app:
     ```bash
     amb login --no-wait
@@ -109,13 +112,13 @@ After installation is confirmed, determine onboarding state with `amb whoami` (J
     - `status: "logged_in"` → login succeeded. Confirm to the user that they're signed in to their **TADA/Throo** member account (always say "TADA/Throo", not just "TADA"). Greet them with a human-friendly identifier if one is set: run `amb whoami` and use its `identity.display_name`, or else `identity.phone`. Do **not** surface the internal `member_id` (a UUID). If neither is set, just confirm the sign-in without an identifier.
     - `status: "invalid_code"` → ask the user to re-read the code and run `login-verify` again.
     - `status: "session_expired"` → start over from `amb login --no-wait`.
-  - **B. Crypto wallet** — follow the wallet setup below.
-  - **C. Decide later** — proceed, but remind the user that a TADA/Throo login or a wallet is required before booking a ride.
-- If `mode` is `null` and `member_available` is **`false`**, this build supports crypto wallets only — go straight to wallet setup below (do not mention TADA/Throo member mode).
+  - **B. Crypto wallet** — nothing more to set up: the wallet you just provisioned is the crypto wallet (it is funded via the normal crypto ride flow at booking time).
+  - **C. Decide later** — proceed on the wallet (crypto) for now, and remind the user they can sign in to a TADA/Throo membership anytime; a mode must be settled before booking a ride.
+- If `mode` is `null` and `member_available` is **`false`**, this build supports crypto only — run the **Wallet setup** flow below and proceed on the wallet (do not mention TADA/Throo member mode).
 
-### Wallet setup (crypto mode)
+### Wallet setup
 
-The user gets the built-in Privy wallet. There is no wallet-type choice to make — when the user asks for a wallet, run this straight away, without asking which kind of wallet they want:
+Every agent gets the built-in Privy wallet — provisioned at onboarding for both member and crypto mode (it does not change pricing or payment). There is no wallet-type choice to make — run this straight away, without asking which kind of wallet they want:
 
 ```bash
 amb wallet-setup --no-wait
@@ -148,7 +151,8 @@ node ${SKILL_DIR}/scripts/install.js
 
 > **Output format:** Command output is human-readable text by default. The
 > structured commands whose output you feed into a later command —
-> `place-search`, `place-detail`, `map-session-verify`, `ride-pay-prepare` —
+> `place-search`, `place-detail`, `map-session-verify`, `ride-pay-prepare`,
+> `ride-search`, and all `coupon-*` commands —
 > must be called with `--json` so you can reliably extract
 > `placeId` / coordinates / `typed_data`. All other commands: read the plain text.
 
@@ -176,6 +180,11 @@ node ${SKILL_DIR}/scripts/install.js
 | | `login --no-wait` | Start TADA/Throo member device-flow login (returns `approval_url`) |
 | | `login-verify` | Complete login with the app's 4-digit code |
 | | `logout` | Clear the active TADA/Throo member session |
+| **Coupon** | `coupon-current` | List coupons the member still holds |
+| | `coupon-past` | List used or expired coupons |
+| | `coupon-detail` | Show one owned coupon |
+| | `coupon-register` | Register a case-sensitive promotion code |
+| | `coupon-available` | Find coupons valid for one route/product/card quote |
 | **Auth** | `siwe-request-message` | Generate SIWE message |
 | | `siwe-submit` | Login with signed SIWE |
 | | `phone-verify-check` | Check phone verification status |
@@ -215,6 +224,8 @@ Start ride-relay in the background once the ride is created and paid:
 - **Crypto (`mode: "wallet"`)** — start ride-relay after `amb ride-request` **and** `amb ride-pay-confirm` succeed.
 
 Member vs crypto argument forms for `ride-search`/`ride-request`/`ride-status`/`ride-cancel` are in `references/ride.md` (`## Ride` → Member mode / Crypto mode). Run `amb whoami` to confirm `mode` before booking.
+
+**Member coupons:** follow `references/ride.md` → **Member coupons** for the canonical sequence. In brief: proactively find a coupon unless the user supplied a code or explicitly declined coupons; let the user choose a bookable product first; evaluate exactly the first **three** `available=true` candidates for that product in gateway order, or all candidates when fewer than three exist; re-quote each candidate and rank the exact quotes by lowest rider-facing price, preserving gateway order for equal prices. Present the winner first and show every successfully evaluated candidate's exact rider-facing price together with its code/title and discount metadata so the rider can choose. This is bounded product-first evaluation, not a global product × coupon minimum. Before `coupon-available`, never describe `available_coupon_count` from `ride-search` as the number of coupons applicable to the selected route/product; only `coupon-available` establishes that set. “Applied” means applied to the quote, not booked. Confirm before `ride-request`, pass the `search_id` from the final re-quote for the coupon the user selected, the selected `product_id`, the exact `coupon_code`, and the quoted `price` as `confirmed_price`; require `na=false`, `discount.applicable=true`, and an exact returned `discount.coupon_code`. A user-supplied code bypasses the three-candidate discovery cap. Requests to apply a coupon automatically, choose the best coupon, or choose the cheapest coupon all use this bounded explicit-code comparison; there is no separate server-side auto-apply path. Never use `campaign_promotion_code`, infer success from HTTP 200, or suggest changing away from card payment.
 
 ```bash
 node ${SKILL_DIR}/scripts/ride-relay.js <request_id> [--agent <agent-id>] [--session-key <session-key>] [--session-id <sid>] [--once]
@@ -292,7 +303,9 @@ Either way the LLM sees `ride_status` events as user-turn messages inside the se
 
 For the full event schema, reconnect procedure, exit-code semantics, and related details, see the ride-relay section of `references/ride.md`.
 
-**Diagnosing a monitoring failure (dev/staging only):** If ride status or driver-chat events aren't reaching the session, run `amb debug <request_id>`. It bundles the always-on diagnostic artifacts — monitor trace, event log, relay-error log, process locks, cursors — plus a summary into `~/.amb/debug/tada-debug-*.zip`. Share that zip for analysis. (Not available on prod builds.)
+**Diagnosing a monitoring failure (dev/staging only):** If ride status or driver-chat events aren't reaching the session, run `amb debug <request_id>`. It bundles the always-on diagnostic artifacts — monitor trace, event log, relay-error log, process locks, cursors — plus a summary into `~/.amb/debug/tada-debug-*.zip`. (Not available on prod builds.)
+
+**Do not send that zip anywhere on the user's behalf.** It carries their ride: pickup and drop-off, timestamps, ride and account identifiers, driver chat. Tell the user where the file is, say what is in it, and let them decide who sees it. If they ask you to share it, that is their call to make with the contents named out loud first.
 
 ## Member ride: card payment auto-resolution
 
@@ -358,7 +371,7 @@ Do not top up to three rides' worth here. The user agreed to take a ride; they d
 
 Then `amb bridge-usdc-quote <wallet> <shortfall> --fast`. If it reports `below_min: true`, raise the amount to `min_usdc` — that is the smallest transfer the bridge accepts, so it is not a discretionary increase. If it reports `sufficient: false`, the source cannot cover even the shortfall: report that and stop, rather than retrying at a smaller amount that would not fix anything.
 
-If the quote reports `preauthorized: true`, run the Fast bridge **without asking** (~40 s, blocking) and report the amount and the actual fee afterwards. If `preauthorized` is `false`, ask — and offer the free 20-minute option alongside.
+**Confirm the transfer before you run it, every time.** Say the amount, the chains it moves between, and the fee, then wait for the user's word. `preauthorized: true` means they set a standing ceiling for the *fee* — it is not agreement to move this sum now, and treating it as such spends their money on a decision they did not make. When `preauthorized` is `false`, the fee needs its own approval too, so ask for both and offer the free 20-minute option alongside. Report the amount and the actual fee once it completes (~40 s, blocking).
 
 **The CLI backs this up.** `bridge-usdc --fast` refuses with `BRIDGE_FEE_NOT_AUTHORIZED` when the fee it computes is not covered by a standing approval, so skipping the quote does not skip the ceiling, and a fee that grew since you quoted is refused rather than spent. Standard is unaffected — its fee is zero.
 

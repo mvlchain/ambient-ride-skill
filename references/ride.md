@@ -6,7 +6,7 @@
 
 ### place_search - Autocomplete suggestions
 
-Before running `place_search` to resolve a ride origin or destination, ask the user for their current location (latitude/longitude) to improve search accuracy. If the user does not know or does not provide it, proceed without it — the search will use the city center as bias point.
+Before running `place_search` to resolve a ride origin or destination, you may ask the user for their current location (latitude/longitude) to improve search accuracy. **Say what it is for and that it is optional** — something like "if you tell me roughly where you are I can rank the results better, but I can search without it". Precise coordinates are sensitive, and asking for them flatly reads as a requirement. They are sent to TADA/Throo as the search's bias point. If the user does not know, does not want to say, or does not answer, proceed without it — the search falls back to the city center.
 
 ```bash
 amb place-search <wallet_address> <city> <query> [latitude] [longitude] --json
@@ -284,28 +284,57 @@ The card (`payment_item_uuid` in `ride-request`, `card_uuid` in `ride-search`) i
 
 **1. Search** — positional args (no `wallet_address`, no `region`; region is resolved automatically from coordinates). The trailing `card_uuid` is optional:
 ```bash
-amb ride-search <origin_lat> <origin_lng> <dest_lat> <dest_lng> [card_uuid]
+amb ride-search <origin_lat> <origin_lng> <dest_lat> <dest_lng> [card_uuid] [--coupon-code CODE] --json
 ```
 
-Each entry in the result's `routes[]` carries `distance_display` and `duration_display` already localized to the rider's region (US regions in miles, elsewhere in km). Present these strings verbatim — do **not** convert distance units yourself.
+The normal result is `{ options[], routes, journey_id, search_id }`. In member mode `routes` is an **object keyed by car type** (e.g. `routes.CAR`), not an array — the crypto-mode `routes[]` array is a different shape. Each entry carries `distance_display` and `duration_display` already localized to the rider's region (US regions in miles, elsewhere in km), alongside the raw `distance_meter` / `duration_seconds`. Present the `*_display` strings verbatim — do **not** convert distance units yourself.
 
-The result is `{ options[], routes[] }`. Each entry in `options[]` carries `product_name` — the rider-facing display name, already region-localized (e.g. `Save Throo` in NY). Present `product_name` to the user; do **not** surface the raw `car_type` / `product_type` enum values (`SEDAN`, `ANYTADA`) — the projection does not return them.
+Preserve the CLI-generated `journey_id` and `search_id`; always pass `search_id` to the following `ride-request`. If local correlation storage is unavailable, the command preserves search behavior and may omit both handles. Each entry in `options[]` carries `product_name` — the rider-facing display name, already region-localized (e.g. `Save Throo` in NY). Present `product_name` to the user; do **not** surface the raw `car_type` / `product_type` enum values (`SEDAN`, `ANYTADA`) — the projection does not return them.
 
 | Field | Meaning |
 |---|---|
 | `product_id` | Pass as `product_id` in `ride-request` |
 | `product_name` | Rider-facing display name (already region-localized) |
-| `price` | **The total the rider is charged** before any coupon or promotion — fares, fees, tolls and taxes included. A numeric string (e.g. `"31.35"`); the currency is in `price_currency`, never embedded here. Show exactly one price per option; there is no separate base fare to display. |
+| `price` | **The quoted total the rider is charged**, including an applicable coupon or promotion. A numeric string (e.g. `"31.35"`); the currency is in `price_currency`, never embedded here. Show exactly one price per option. |
 | `price_currency` | ISO currency code for `price` (e.g. `USD`) |
 | `na` | `true` when the option cannot be booked right now. This is the single availability signal — it already accounts for every reason booking would reject the option. |
 
+When `discount` is present, inspect `discount.applicable`; HTTP 200 alone is not proof that a coupon applied. `discount.coupon_code` is the user coupon to copy into `ride-request`. `discount.campaign_promotion_code` is a server campaign and must never be used as `coupon_code`.
+
+A campaign promotion may be applicable even when no coupon code was sent. Keep its discounted `price` in the normal quote, but leave `coupon_code` out of `ride-request`; the server re-evaluates the campaign during creation. Do not gate campaign pricing on explicit coupon intent.
+
+For an applicable coupon, `price` already includes fees that are outside the coupon calculation basis. Do not replace it with `discount.discounted_price`, recalculate it, or show that nested field as the final charge.
+
 An option with `na: true` always has `price: null`, and an option with `na: false` always has a `price`. Offer only `na: false` options to the rider.
 
-**2. Request** — a single JSON argument. `locations` is `[origin, destination]`; `payment_item_uuid` (the card) and `product_id` are both optional:
+**2. Request** — a single JSON argument. `locations` is `[origin, destination]`; `payment_item_uuid` (the card) is optional. `product_id` is optional without a coupon and required when `coupon_code` is present:
 ```bash
-amb ride-request '{"locations":[{"latitude":<oLat>,"longitude":<oLng>,"name":"<origin name>","address":"<origin address>"},{"latitude":<dLat>,"longitude":<dLng>,"name":"<dest name>","address":"<dest address>"}],"product_id":<optional int>}'
+amb ride-request '{"search_id":"<search_id from ride-search>","locations":[{"latitude":<oLat>,"longitude":<oLng>,"name":"<origin name>","address":"<origin address>"},{"latitude":<dLat>,"longitude":<dLng>,"name":"<dest name>","address":"<dest address>"}],"product_id":<required with coupon_code; otherwise optional int>,"coupon_code":"<optional exact code>","confirmed_price":"<required with coupon_code: exact quoted price>"}'
 ```
-Required field: `locations`. On success the ride is created in `PENDING` and the card is charged — **immediately start `ride-relay.js`** (see the ride-relay section). Do **not** call `ride-pay-prepare`/`ride-pay-confirm`.
+Agent-required fields are `search_id` from the selected search result and `locations`. The CLI still accepts a missing `search_id` for backward compatibility, but that request cannot join the correlated telemetry funnel. On success the ride is created in `PENDING` and the card is charged — **immediately start `ride-relay.js`** (see the ride-relay section). Do **not** call `ride-pay-prepare`/`ride-pay-confirm`.
+
+#### Member coupons
+
+Coupon commands are member-only and should be called with `--json` when their output feeds the booking flow:
+
+```bash
+amb coupon-current [--page N] [--page-size N] [--sort createdAt|validUntil[,asc|desc]] --json
+amb coupon-past [--status used|expired] [--page N] [--page-size N] [--sort createdAt|validUntil[,asc|desc]] --json
+amb coupon-detail <code> --json
+amb coupon-register <case-sensitive-code> --json
+amb coupon-available '{"locations":[...],"product_id":<id>,"payment_item_uuid":"<optional card>"}' [--lang TAG] --json
+```
+
+Use this sequence for a member booking unless the user supplies a code or explicitly declines coupons:
+
+1. Run the normal member `ride-search` and select a bookable product. Keep its locations, product id, card, and currency as the comparison context. `discount.available_coupon_count` is not proof that those coupons apply to this route/product; do not announce an applicable-coupon count before the next step.
+2. Run `coupon-available` with the same locations and `product_id`. Its JSON result is the gateway coupon array. Keep only entries whose `available` is `true`; unavailable entries may be explained using `unavailable_reason`. Treat an unknown numeric `status` or `discount_type` as unavailable even though its raw value is preserved.
+3. Preserve the gateway order and evaluate exactly the first three remaining codes, or all remaining codes when fewer than three exist. Re-run `ride-search --coupon-code <exact code> --json` for each evaluated code. In each response, select the comparison product by the original `product_id`; keep only `na: false`, `discount.applicable: true`, and an exact `discount.coupon_code` match. Do not fan out across every product and every coupon.
+4. Rank the valid quotes by lowest rider-facing `price` in the same currency among the evaluated candidates. For equal prices, preserve the original gateway order. Present the winner first, then show every successfully evaluated candidate's exact rider-facing price with its code/title and available discount metadata so the rider can compare and choose. Do not invent or display a price for an unavailable or unsuccessfully evaluated candidate. The winner is applied to the quote only — do not create the ride yet. This bounded evaluation is not a guarantee of the best coupon across all held coupons or all products.
+5. Ask for booking confirmation with the winner's exact `price`. If the user chooses an alternative, re-quote that code and show its exact price before asking again.
+6. Run `ride-request` with the `search_id` from the final re-quote for the coupon the user selected, the selected `product_id`, the confirmed exact `coupon_code`, and the quoted `price` string in `confirmed_price`. The CLI requires the three coupon confirmation fields (`product_id`, `coupon_code`, and `confirmed_price`), performs the mandatory fresh server quote, accepts only an equivalent canonical decimal amount, and refuses to create the ride if that rider-facing total changed after confirmation.
+
+If the user directly supplies a known code, skip discovery and comparison, honor that code, and re-quote it; the three-candidate cap does not apply, and booking must use that re-quote's `search_id`. If no evaluated candidate applies, show the normal quote and say that no usable coupon was found. Requests to apply a coupon automatically, choose the best coupon, or choose the cheapest coupon all use the bounded explicit-code comparison above; there is no separate server-side auto-apply path. A campaign-only `campaign_promotion_code` is never a booking code. Never infer application from HTTP 200, and never switch payment away from card. `COUPON_PRICE_CHANGED` requires showing a new quote, obtaining confirmation again, and booking with that new quote's `search_id`. Any coupon failure during booking requires a new quote or explicit user approval to continue without it; the CLI never retries couponless automatically.
 
 > **Coordinates must be flattened out of the place response.** `place-search` / `place-detail` nest coordinates under `lat_lng`, and each location you send must carry them **top-level** as `latitude` / `longitude`:
 >

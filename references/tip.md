@@ -47,7 +47,8 @@ After ride status becomes `FINISHED`:
    - If `tip-config` returned `presets`, offer those directly.
    - Otherwise suggest `minAmount` and a couple of higher values, and let the user enter a custom amount (up to `maxAmount` `currency` when a max exists).
 5. Validate the amount is within range (`>= minAmount`, and `<= maxAmount` when a max exists); re-prompt if not.
-6. Run the payment: `amb tip <ride_id> <amount>` (add `--currency`/`--card` only when needed).
+6. **Confirm before charging.** State the amount and currency, the driver, the ride, and where the money comes from — the card for member rides, the wallet for crypto — and wait for the user to agree. Picking an amount is not the same as agreeing to pay it: a number in a sentence can be a question, a guess, or a correction. This step is required even when the user named the amount themselves, and there is no version of this flow that skips it.
+7. Run the payment: `amb tip <ride_id> <amount>` (add `--currency`/`--card` only when needed).
 
 ## Tip Flow — User-initiated
 
@@ -55,12 +56,12 @@ If the user says they want to tip (no specific ride):
 1. Call `amb ride-history` → show rides where `tipPaymentAvailable: true` (date, pickup → destination).
 2. If none → "No rides available for tipping right now".
 3. User selects a ride → call `amb ride-history-detail` to get the driver name.
-4. Proceed to amount selection (same as above, step 4 onward), then pay with `amb tip <ride_id> <amount>`.
+4. Proceed to amount selection (same as above, step 4 onward — including the confirmation in step 6), then pay with `amb tip <ride_id> <amount>`.
 
 If the user specifies a ride ID directly:
 1. Call `amb ride-history-detail` to verify `tipInfo.tipPaymentAvailable`.
 2. If `false` → "Tipping is not available for this ride (time limit passed or already tipped)".
-3. If `true` → proceed to amount selection, then `amb tip <ride_id> <amount>`.
+3. If `true` → proceed to amount selection and the step 6 confirmation, then `amb tip <ride_id> <amount>`.
 
 ## Settlement note (member)
 
