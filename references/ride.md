@@ -388,8 +388,8 @@ Card register, delete, and set-default operations are not exposed by the CLI —
 
 ### Crypto mode (`mode: "wallet"`) — collateral/USDC ride flow
 
-> **JWT expired / `JWT_NOT_FOUND` mid-ride → re-authenticate with SIWE, then retry the failed command.**
-> If any crypto command (`ride-search`, `setup-check`, `ride-pay-prepare`, …) returns `JWT expired` or `JWT_NOT_FOUND`, run these three commands **in order**, then re-run the command that failed. They are **positional — do NOT invent `--siwe` / `--file` / any flag**, and the argument order is exact:
+> **JWT expired / `JWT_NOT_FOUND` mid-ride → re-authenticate with the registered wallet, then retry the failed command.**
+> For MetaMask, follow the typed-login and exact-resume contract in [Wallet reference](wallet.md). For Built-in Privy, run these three legacy SIWE commands **in order**. They are **positional — do NOT invent `--siwe` / `--file` / any flag**, and the argument order is exact:
 > ```bash
 > amb siwe-request-message <wallet_address> <chain_id>   # → returns siwe_file path
 > amb wallet-sign <wallet_address> personal_sign <siwe_file>   # 3rd arg is the FILE PATH, not the message text → returns signature
@@ -878,8 +878,10 @@ amb wallet-setup --no-wait
 amb wallet-status
 ```
 
-2. SIWE login (required to obtain JWT)
+2. Login (required to obtain JWT)
 ```bash
+# MetaMask: follow the typed-login contract in references/wallet.md
+# Built-in Privy:
 amb siwe-request-message 0x1234... <chain_id>
 amb wallet-sign 0x1234... personal_sign <siwe_file>
 amb siwe-submit <siwe_file> <signature>
@@ -956,7 +958,7 @@ When a command fails, take the following action based on the error code:
 | Error code | Action |
 |------------|--------|
 | `WALLET_NOT_FOUND` | Run `amb wallet-setup --no-wait` |
-| `JWT_NOT_FOUND` | Run `amb siwe-request-message` + `amb siwe-submit` |
+| `JWT_NOT_FOUND` | MetaMask: follow the typed-login and exact-resume contract in [Wallet reference](wallet.md). Built-in Privy: run legacy `amb siwe-request-message` → `amb wallet-sign ... personal_sign` → `amb siwe-submit`. |
 | `PHONE_NOT_VERIFIED` | Run `amb phone-verify-start` + `amb phone-verify-confirm` |
 | `INSUFFICIENT_DEPOSIT` | Run `amb deposit-status` for the shortfall, then `amb deposit-add <wallet> <network> <token> <amount>`. **`deposit-add` spends Base USDC too** — if `amb wallet-balance` shows too little USDC on the payment chain and a positive USDC row on the bridge source chain, bridge first (SKILL.md → "USDC bridge"), then deposit, then request the ride. `requiredToActivate[].tokenWei` is **raw** (USDC has 6 decimals: `"4000000"` is 4.00 USDC) — convert before passing it anywhere that takes decimal, such as `bridge-usdc`. It is the amount `deposit-add` will **spend**, so the amount to *bridge* is that minus what the wallet already holds on the payment chain: `max(0, amount - payment-chain USDC)`. Note the MVL entry is a different currency — do not bridge against it. When `requiredToActivate` is `null`, do not guess an amount: report `requiredToActivateReason` instead. |
 | `INSUFFICIENT_BALANCE` | Run `amb wallet-balance`. If the bridge source chain's USDC row has funds, the wallet can be topped up from Ethereum — see SKILL.md → "USDC bridge". If that chain has no rows at all, this build has no bridge and that is not the problem. Once the bridge lands, retry the payment or tip that failed. |

@@ -4,13 +4,36 @@
 
 ## Signing Strategy
 
-Crypto-mode users sign with the built-in Privy wallet:
+Crypto-mode users sign with their selected registered wallet. The built-in Privy wallet's
+legacy SIWE path uses `personal_sign` (Privy-only):
 
 ```bash
 amb wallet-sign <address> personal_sign <siwe_file>
 ```
 
-Older installs may still hold a wallet of type `external` (registration of new ones is no longer offered). Those cannot be signed for by the skill — ask the user to sign the message with their own wallet tool and pass the signature back.
+Wallets come in two working kinds. During wallet onboarding, offer **Built-in Privy
+(recommended/default)** or **MetaMask**. `privy` is the built-in embedded wallet provisioned by
+`wallet-setup`. `metamask` is an external wallet driven through the MetaMask Agent Wallet CLI
+(`mm`), registered with `wallet-connect-metamask`; the skill never sees its keys and asks `mm`
+for every signature. Use Privy when the user has no preference.
+
+The Agent runs `amb wallet-connect-metamask` for a MetaMask choice; never tell the user to run
+an `amb` command. When the command returns `status: "approval_pending"`, ask the user only to
+complete the external MetaMask approval and end the turn. After confirmation, the Agent runs
+the identical `amb wallet-connect-metamask` command again. The command resumes its private
+mode-0600 state automatically and deletes that state after registration or a definite terminal
+result; pending or indeterminate results remain resumable. Never expose or manually
+use an mm polling ID. After registration, the Agent runs typed login in order: `amb siwe-request-typed <wallet_address> <chain_id>` → `amb wallet-sign <wallet_address> eth_signTypedData_v4 <typed_file>` → `amb typed-submit <typed_file> <signature>`.
+
+For typed-sign approval recovery, follow the exact-command contract in
+[`wallet_sign`](#wallet_sign---sign-a-message) below; it applies to both login and payment.
+
+Older installs may still hold a wallet of type `external`, registered by the retired
+`wallet-add-external` command. The skill cannot sign for those. Re-register with
+`wallet-connect-metamask`.
+
+A MetaMask wallet pays its own gas for the one-time `approve` before its first MVL deposit and
+for a direct collateral withdrawal. Depositing USDC needs no gas.
 
 Check wallets:
 ```bash
@@ -27,7 +50,8 @@ amb wallet-status
 amb wallet-setup --no-wait [--force-new]
 ```
 
-Creates the user's built-in Privy wallet, or checks the status of an existing one. This is the only wallet-creation path — do not ask the user to pick a wallet type; run it as soon as a crypto wallet is needed.
+Creates the user's built-in Privy wallet, or checks the status of an existing one. Run it after
+the user selects the recommended/default Privy option during wallet onboarding.
 - `--no-wait`: **Required for agent use.** Returns the JSON contract (`auth_required` / `auth_pending` with `auth_url`, or `ready`) and exits immediately, so the agent can show the URL to the user. Without this flag the command blocks for up to 5 minutes waiting for a human at a terminal to finish webapp auth — an agent cannot drive that.
 - `--force-new`: Create a new wallet even if one already exists
 
@@ -63,12 +87,25 @@ Never display the raw URL as plain text — it is long and wraps in the terminal
 ### wallet_sign - Sign a message
 
 ```bash
-amb wallet-sign <wallet_address> <sign_method> <siwe_file|json>
+amb wallet-sign <wallet_address> <sign_method> <siwe_file|typed_file|typed_data_json>
 ```
 
 The third argument depends on `sign_method` — it is **not** a raw message string:
-- `personal_sign` → pass the **`siwe_file` path** returned by `amb siwe-request-message` (used for SIWE re-auth): `amb wallet-sign <wallet_address> personal_sign <siwe_file>`
-- `eth_signTypedData_v4` → pass the **typed-data JSON** (used for ride/tip payment): `amb wallet-sign <wallet_address> eth_signTypedData_v4 '<typed_data_json>'`
+- `personal_sign` → Built-in Privy SIWE re-auth only. Pass the **`siwe_file` path** returned by `amb siwe-request-message`: `amb wallet-sign <wallet_address> personal_sign <siwe_file>`. Do not use this for MetaMask login.
+- `eth_signTypedData_v4` → for MetaMask login, pass the **`typed_file` path** returned by `amb siwe-request-typed`: `amb wallet-sign <wallet_address> eth_signTypedData_v4 <typed_file>`. For ride/tip payment, pass the inline typed-data JSON: `amb wallet-sign <wallet_address> eth_signTypedData_v4 '<typed_data_json>'`.
+
+For MetaMask, an `approval_pending` result is not a reason to submit again. After the user
+completes external approval, rerun this exact command; its private mode-0600 state resumes the
+same address-scoped request automatically. Address/method/input/parsed-data mismatch preserves
+the pending request and fails closed; only the exact expired typed file may clear its stale state.
+Pending/indeterminate remains resumable, while success or any terminal result clears it. Never
+expose polling internals or ask the user to run `amb` or `mm`.
+
+If a MetaMask command reports a coded `*_RESUME_INVALID` error, it names only the
+affected resume file. Do not delete that file or start a fresh request automatically.
+An operator must reconcile the matching mm request without exposing its credential or
+polling ID: preserve the file while the request is pending or indeterminate, and remove
+it only after confirming that the request is terminal or absent.
 
 ### wallet_send_tx - Send transaction
 
@@ -76,7 +113,11 @@ The third argument depends on `sign_method` — it is **not** a raw message stri
 amb wallet-send-tx <wallet_address> <to> <value_eth> <chain_id> [data]
 ```
 
-## SIWE Authentication
+## Built-in Privy SIWE Authentication
+
+This legacy SIWE flow is for Built-in Privy. MetaMask login uses only the typed-login sequence
+documented above; if its signature is pending, rerun the exact same `wallet-sign` command after
+the user approves it.
 
 ### siwe_get_message - Generate SIWE message
 
@@ -439,7 +480,7 @@ Each network entry also includes activation guidance:
 - `requiredToActivate`: array of `{ tokenAddress, symbol, tokenWei, display, ratePreview? }` — each entry is one way to reach the minimum. `null` only when the gap is `0` (the agent is already active).
   - The **MVL entry always comes first and is always present** while a gap exists. MVL is credited 1:1, so `tokenWei` is exactly the gap, `display` carries no `~` (e.g. `"40000 MVL to activate"`), and `ratePreview` is **absent** — there is no conversion to preview.
   - Convertible entries (USDC, …) are best-effort: they need a SIWE JWT and the server rate endpoint. `display` is an estimate (`"~4.00 USDC to activate"`) and `ratePreview` is a display-only rate string.
-- `requiredToActivateReason`: `null` | `"NO_JWT"` (no SIWE login — run `siwe-request-message` then `siwe-submit`) | `"RATE_UNAVAILABLE"` (rate service error / no convertible tokens). **It describes the convertible-token half only.** A non-empty array alongside a non-null reason is normal and means "MVL is available; the converted options could not be computed" — do not read it as a total failure.
+- `requiredToActivateReason`: `null` | `"NO_JWT"` (no wallet login — follow `requiredToActivateHint`: typed login for MetaMask, legacy SIWE for Privy) | `"RATE_UNAVAILABLE"` (rate service error / no convertible tokens). **It describes the convertible-token half only.** A non-empty array alongside a non-null reason is normal and means "MVL is available; the converted options could not be computed" — do not read it as a total failure.
 - `requiredToActivateHint`: present only for `NO_JWT`; a one-line next-step string. Absent (or `null`) in all other cases.
 
 So a user who has not logged in yet still gets an actionable answer:
@@ -452,9 +493,19 @@ So a user who has not logged in yet still gets an actionable answer:
 "requiredToActivateReason": "NO_JWT"
 ```
 
-That path is genuinely usable without logging in: an MVL deposit needs no SIWE JWT, because it goes straight to the ledger rather than through the relay.
+The MVL guidance itself is available without logging in. A Privy MVL deposit also needs no JWT because it goes straight to the ledger; a MetaMask MVL deposit uses the signature relay and therefore needs a cached JWT.
 
 Chain reads always render regardless — a rate-service failure never blocks the rest of `deposit-status`.
+
+The collateral selection policy is identical for Built-in Privy and MetaMask. Present the
+returned `requiredToActivate` MVL/USDC options and ask the user which asset to use. Run
+`amb wallet-balance <wallet_address>` and match its network/token row; compare its decimal
+`amount` with the selected option's human-readable `display` amount. If the balance is short,
+report the shortfall and stop rather than choosing or funding another asset. Otherwise, state
+the network, asset, and amount, get confirmation, run `amb deposit-add` with the selected
+option's exact `tokenAddress` and raw `tokenWei`, and finish by running `amb deposit-status`
+again. Wallet type changes only execution: Privy MVL is sponsored/direct; MetaMask MVL uses
+`ROUTER_SIG` and may need a one-time gas-paid allowance approval.
 
 ### deposit_token - Deposit token collateral
 
@@ -464,10 +515,10 @@ amb deposit-add <wallet_address> <network> <token_address> <amount> [--no-wait]
 
 - `wallet_address`: Wallet address (0x...)
 - `network`: Deposit network name (e.g. `BASE_SEPOLIA`, `ETHEREUM`)
-- `token_address`: Token contract address. **Run `amb deposit-tokens <network>` to get it** — that command lists every depositable token for the network, MVL included, with its address. The command then picks a path automatically from the token: the network's **MVL token** takes **Path A** (direct deposit); **any other whitelisted convertible token** (e.g. USDC) takes **Path B** (gasless relay).
+- `token_address`: Token contract address. **Run `amb deposit-tokens <network>` to get it** — that command lists every depositable token for the network, MVL included, with its address. The command first identifies MVL vs. a convertible token, then chooses the signing path for the registered wallet.
 - `amount`: Raw units in the token's own decimals (MVL has 18 decimals → 1 MVL = "1000000000000000000"; USDC has 6 decimals → 1 USDC = "1000000").
 
-**Path A — MVL direct deposit:**
+**Path A1 — MVL with a Privy wallet (direct deposit):**
 
 When `token_address` matches the MVL token for the specified network, the command executes a `wallet_sendCalls` batch containing:
 1. MVL `approve` (agent router as spender)
@@ -493,9 +544,60 @@ Success response:
 - `batch_tx.transaction_id`: Blockchain transaction identifier (not a user-operation hash).
 - To confirm the deposit landed, run `amb deposit-status <wallet_address>` (reads on-chain ledger state).
 
+**Path A2 — MVL with a MetaMask wallet (`ROUTER_SIG` relay):**
+
+MetaMask cannot use Privy's sponsored atomic batch. The command instead fetches the server's
+`ROUTER_SIG` capability and signs the router's exact EIP-712 envelope (`DepositRouter`, version
+`1`, `DepositMVL(address agent,uint256 amount,uint256 nonce,uint256 deadline)`). The raw 65-byte
+signature is submitted to the relay; the client never splits it into `v`/`r`/`s`.
+
+MVL has no permit/EIP-3009 support, so the router still needs ERC-20 allowance. If allowance is
+short, the command first asks MetaMask to approve `uint256.max` and waits until that allowance is
+visible on-chain before signing/submitting the deposit. This approval uses the wallet's native
+gas. It is intentionally max allowance so subsequent deposits can remain gasless; if sufficient
+allowance already exists, no approval transaction is sent.
+
+Prerequisites:
+
+1. `mm` is authenticated and its active address is the registered MetaMask wallet.
+2. A cached JWT exists. Obtain it with `amb siwe-request-typed`, sign its file with
+   `amb wallet-sign <wallet> eth_signTypedData_v4 <typed_file>`, then run
+   `amb typed-submit <typed_file> <signature>`. If signing returns `approval_pending`, ask the
+   user to approve it and rerun that exact `wallet-sign` command; do not switch to `personal_sign`.
+3. The wallet holds enough MVL, and enough native gas for the first approval if allowance is low.
+4. The configured network and gateway advertise a matching `ROUTER_SIG` capability.
+
+The default command polls to a terminal relay state. A first-deposit response retains the approval
+hash so both transactions can be audited:
+
+```json
+{
+  "path": "mvl-sig-relay",
+  "token": "0x0283...",
+  "agent": "0x5678...",
+  "amount": "1000000000000000000",
+  "approve_tx": "0xapprove...",
+  "request_id": "req_abc123",
+  "status": "CONFIRMED",
+  "mvl_amount": "1000000000000000000",
+  "tx_hash": "0xdeposit..."
+}
+```
+
+`approve_tx` is absent when existing allowance was reused. With `--no-wait`, the command returns
+the PENDING request immediately and it can be resumed with `deposit-relay-status`.
+
+The CLI keeps the exact signed request in local state until a terminal result has been printed.
+If the relay POST response is lost, re-running the same `deposit-add` command re-submits that exact
+signature so the server returns its idempotent original request; it does not create a new nonce.
+While that request is unresolved, another MVL amount for the same wallet/network/token fails with
+`MVL_DEPOSIT_IN_FLIGHT`. A concurrent invocation that arrives while MetaMask is still approving or
+signing fails with `MVL_DEPOSIT_PREPARING` before opening a second wallet prompt. Follow the held
+MetaMask request's approval instructions rather than retrying it in parallel.
+
 **Path B — Convertible token deposit (e.g. USDC), gasless relay:**
 
-When `token_address` is **not** the MVL token, the command routes the deposit through the agent-deposit relay: it fetches a backend-signed PriceQuote (token→MVL conversion), wraps an EIP-3009 `transferWithAuthorization` for the agent's Kernel smart account, and submits it via the relayer. No native gas is needed — the relayer pays. Requires a valid SIWE JWT (run `amb siwe-auth` first if the cached token is missing/expired).
+When `token_address` is **not** the MVL token, the command routes the deposit through the agent-deposit relay: it fetches a backend-signed PriceQuote (token→MVL conversion), wraps an EIP-3009 `receiveWithAuthorization` for the agent's Kernel smart account, and submits it via the relayer. No native gas is needed — the relayer pays. Requires a valid cached JWT.
 
 > - **Credited as MVL** — the deposited token is converted to an MVL ledger credit at the backend's quoted rate. The blocking response includes `mvl_amount` (the quoted MVL credit, wei). A later `deposit-withdraw` returns MVL, not the token you deposited.
 
@@ -519,7 +621,7 @@ When the relay cannot be used, the command fails with one of **two** codes. They
 | Code | What happened | Recovery |
 |---|---|---|
 | `RELAY_UNAVAILABLE` | The gateway could not be reached (down, non-2xx, unparseable). **Transient.** | Check the cached JWT and the gateway, then **retry**. |
-| `TOKEN_NOT_DEPOSITABLE` | The relay answered and has no capability for this token on this network — it cannot be used as collateral. **Permanent.** | **Retrying will not help.** Run `amb deposit-tokens <network>` and use a listed token. Both messages name the MVL address, which is always accepted and needs no relay. |
+| `TOKEN_NOT_DEPOSITABLE` | The relay answered and has no capability for this token on this network — it cannot be used as collateral. **Permanent.** | **Retrying will not help.** Run `amb deposit-tokens <network>` and use a listed token. The error names the MVL address, which remains available through the registered wallet's MVL path. |
 
 Reporting the second as a connectivity problem sends the user to re-authenticate and check the gateway, neither of which can fix a wrong token address.
 
@@ -531,7 +633,7 @@ Either way, confirm the deposit landed with `amb deposit-status <wallet_address>
 amb deposit-relay-status <wallet_address> <request_id>
 ```
 
-- `request_id`: from a `deposit-add` response when `path: "relay"`.
+- `request_id`: from a `deposit-add` response when `path` is `"relay"` or `"mvl-sig-relay"`.
 - Prints `{ request_id, status, tx_hash?, error_code?, error_message? }`. Exits non-zero when `status` is `FAILED`. Poll every ~3s until `CONFIRMED` or `FAILED`.
 
 ### withdraw - Withdraw collateral
@@ -542,7 +644,9 @@ amb deposit-withdraw <wallet_address> <network>
 
 - `network`: Deposit network name (e.g. `BASE_SEPOLIA`, `ETHEREUM`).
 
-v2 withdraws the **full MVL ledger balance** in one call — there is no token arg. The router calls `withdraw()` (no args); the agent-deposit ledger then transfers all credited MVL back to the agent EOA. Gas is Privy-sponsored.
+v2 withdraws the **full MVL ledger balance** in one call — there is no token arg. The router calls `withdraw()` (no args); the agent-deposit ledger then transfers all credited MVL back to the agent EOA. Built-in Privy uses sponsored gas. MetaMask submits the same call directly through `mm`, so the selected wallet must hold native gas on the withdrawal network.
+
+If MetaMask returns `MM_APPROVAL_PENDING` or an indeterminate request, ask the user to complete the external approval and then have the Agent rerun the identical `amb deposit-withdraw` command. The CLI privately retains the exact polling ID and watches that request instead of submitting another transaction. It deletes the resume state only after success or a definite terminal rejection. Never expose or manually use the polling ID.
 
 > - **Returns MVL** — withdrawal always returns the **MVL token**, regardless of which token you originally deposited (e.g. a USDC deposit is refunded as MVL).
 
@@ -567,6 +671,6 @@ Run `amb deposit-status <wallet_address>` to see the current `nextWithdrawAt`.
 }
 ```
 
-- `withdraw_tx`: same `WalletSendTxResult` shape as other sponsored ops — `kind: 'tx_hash'` when the chain accepts immediately, `kind: 'user_operation_hash'` while the userOp is in flight.
+- `withdraw_tx`: `WalletSendTxResult` — MetaMask returns `kind: 'tx_hash'`; Privy may return `kind: 'tx_hash'` or `kind: 'user_operation_hash'` while the userOp is in flight.
 
 **Back-compat.** Previous releases required a 3rd `<token>` positional. v2 ignores any value passed there and prints a stderr deprecation warning. The form will be removed in a later release; new scripts should drop it now.

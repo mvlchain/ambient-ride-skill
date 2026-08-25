@@ -1,6 +1,6 @@
 ---
 name: ride
-version: 1.1.0
+version: 1.2.0
 description: Ambient Ride skill for TADA/Throo ride-hailing and taxi service. Wallet, deposit, collateral, ride, payment, chat, and tipping workflows.
 metadata:
   openclaw:
@@ -43,7 +43,7 @@ metadata:
 ## Overview
 
 Skill for the TADA/Throo ride-hailing service.
-- Wallet creation and management (Privy-based)
+- Wallet creation and management (built-in Privy or MetaMask)
 - Ride search, booking, payment
 - Real-time driver chat
 - Driver tipping
@@ -89,7 +89,7 @@ test -s "${AMB_RIDE_STATE_DIR:-$HOME/.amb}/state/data/.installed"
 After installation is confirmed, determine onboarding state with `amb whoami` (JSON) and continue with the matching branch:
 
 - If `mode` is `tada` or `wallet`, onboarding is already done — proceed. **But `mode: tada` alone does NOT mean the member is signed in** — it only means a member account is registered on this machine. Check the `authenticated` field: if `authenticated` is **`false`** (`auth_state: "needs_login"`), the session is not usable (expired/not finished) — do **not** proceed as logged-in. Tell the user their TADA/Throo session isn't active and run `amb login --no-wait` (sign-in flow below) before any member action. Re-entering a 4-digit code from an earlier attempt won't work (that code has expired) — always start a fresh `amb login`. When `authenticated` is `true` (`auth_state: "active"`), the session is usable (a live token, or a refresh that renews automatically) — proceed. Additionally, if `mode` is `tada` and `has_wallet` is **`false`** (an existing member from before wallet provisioning shipped), you may offer to provision their wallet now with the **Wallet setup** flow below — but this is **optional**: the member can skip and continue, and you must **not** block ride actions on it.
-- If `mode` is `null` (onboarding), **provision a wallet first, then choose a mode.** Every agent holds a wallet regardless of mode — it does not change ride pricing or payment. First run the **Wallet setup** flow below to provision it. Then, once the wallet is ready and `member_available` is **`true`**, ask the user which mode to use — this choice drives ride **pricing** and backend (member and crypto are priced differently), so keep it explicit:
+- If `mode` is `null` (onboarding), **offer the wallet choice and complete the selected Wallet setup flow first, then choose a mode.** Every agent holds a wallet regardless of mode — it does not change ride pricing or payment. Once the selected wallet is ready and `member_available` is **`true`**, ask the user which mode to use — this choice drives ride **pricing** and backend (member and crypto are priced differently), so keep it explicit:
   - **A. TADA/Throo member account** — sign in with the TADA/Throo app:
     ```bash
     amb login --no-wait
@@ -114,11 +114,16 @@ After installation is confirmed, determine onboarding state with `amb whoami` (J
     - `status: "session_expired"` → start over from `amb login --no-wait`.
   - **B. Crypto wallet** — nothing more to set up: the wallet you just provisioned is the crypto wallet (it is funded via the normal crypto ride flow at booking time).
   - **C. Decide later** — proceed on the wallet (crypto) for now, and remind the user they can sign in to a TADA/Throo membership anytime; a mode must be settled before booking a ride.
-- If `mode` is `null` and `member_available` is **`false`**, this build supports crypto only — run the **Wallet setup** flow below and proceed on the wallet (do not mention TADA/Throo member mode).
+- If `mode` is `null` and `member_available` is **`false`**, this build supports crypto only — offer and complete the **Wallet setup** choice below, then proceed on the wallet (do not mention TADA/Throo member mode).
 
 ### Wallet setup
 
-Every agent gets the built-in Privy wallet — provisioned at onboarding for both member and crypto mode (it does not change pricing or payment). There is no wallet-type choice to make — run this straight away, without asking which kind of wallet they want:
+Offer these two choices when a wallet is first needed:
+
+- **Built-in Privy (recommended/default)** — the simplest managed setup. If the user has no preference, use this option.
+- **MetaMask** — an external wallet controlled through the MetaMask Agent Wallet CLI; the skill never receives its key.
+
+For Built-in Privy, the Agent runs:
 
 ```bash
 amb wallet-setup --no-wait
@@ -126,6 +131,21 @@ amb wallet-setup --no-wait
 `--no-wait` returns immediately with an `auth_url`. Without it the command blocks for an interactive terminal user.
 
 **Send the `auth_url` to the user as a markdown link and end your turn there.** The user cannot see any message you have not sent yet, so the approval page cannot be opened while you keep working. Run `amb wallet-setup-verify` only *after* the user tells you they finished the page — it reports the current status and returns at once (do not call it in a loop).
+
+For MetaMask, the Agent runs `amb wallet-connect-metamask`; never tell the user to run an
+`amb` command. If it returns `status: "approval_pending"`, ask the user only to complete the
+external MetaMask approval and end the turn. After the user confirms, run the identical
+`amb wallet-connect-metamask` command again. It automatically resumes the stored request;
+never start a new request or expose/use an mm polling ID. Continue typed login as documented
+in [Wallet reference](references/wallet.md), with the Agent running every command. If a MetaMask
+typed signature needs external approval, the Agent uses the same exact-command recovery contract.
+
+If the command returns `MM_NOT_INSTALLED`, explain that the MetaMask Agent Wallet CLI is not
+installed or is not on `PATH`, then offer: install it with
+`npm i -g @metamask/agentic-cli` (requires Node >= 22.18), switch to Built-in Privy, or stop.
+Installing a global package requires the user's explicit approval. Do not search the machine for
+another `mm`, modify `PATH`, or install it automatically. After an approved installation, retry
+`amb wallet-connect-metamask`; for Privy, continue with `amb wallet-setup --no-wait`.
 
 If `amb wallet-status` shows more than one wallet already registered (older installs may have several), ask the user which one to use before proceeding.
 
@@ -136,6 +156,11 @@ For full wallet details (signing strategy, SIWE auth, phone verification, collat
 amb setup-check <wallet_address>
 ```
 Only proceed if `ready_for_ride: true`. If false, fix each failing item before continuing. Checks wallet/jwt/phone from local DB first; verifies deposit on-chain only if all pass. If you don't know the wallet address, run `amb wallet-status` first.
+
+If the local checks pass but collateral is inactive, follow the provider-independent collateral
+selection and consent flow in [Wallet reference](references/wallet.md) from `deposit_check`
+through `deposit_token`. Built-in Privy and MetaMask use that same policy; do not select or fund
+an asset automatically or create a separate MetaMask collateral policy.
 
 ## Canonical invocation
 
@@ -163,14 +188,15 @@ node ${SKILL_DIR}/scripts/install.js
 | **Wallet** | `wallet-status` | List registered wallets |
 | | `wallet-setup --no-wait` | Create Privy wallet (always pass `--no-wait`) |
 | | `wallet-setup-verify` | Check webapp auth status (after the user says they approved) |
+| | `wallet-connect-metamask` | Connect or resume connection of a MetaMask Agent Wallet CLI account |
 | | `wallet-sign` | Sign message (SIWE or typed data) |
 | | `wallet-send-tx` | Send transaction |
 | | `wallet-balance` | Wallet holdings as `balances[]` — one row per (chain, token), each naming its own `network`. Covers the payment chain, the bridge source chain, and deposit chains (MVL included). |
 | **Deposit** | `deposit-status` | Check collateral status |
-| | `deposit-add` | Deposit token collateral. Get the token address from `deposit-tokens`. MVL goes direct (no relay, no SIWE needed); USDC uses the gasless relay and blocks until confirmed (`--no-wait` to opt out) |
+| | `deposit-add` | Deposit token collateral. Get the token address from `deposit-tokens`. Privy MVL goes direct; MetaMask MVL uses a `ROUTER_SIG` relay (cached JWT + one-time gas-paid approval); USDC uses the conversion relay. Relay paths block until confirmed (`--no-wait` to opt out). |
 | | `deposit-relay-status` | Poll a gasless relay deposit by `request_id` |
 | | `deposit-tokens` | List every depositable token for a network, MVL first, with addresses — the way to get the address `deposit-add` needs |
-| | `deposit-withdraw` | Withdraw collateral (returns MVL regardless of the token deposited) |
+| | `deposit-withdraw` | Withdraw collateral as MVL. Privy uses sponsored gas; MetaMask submits `router.withdraw()` directly and pays native gas. A pending MetaMask approval resumes when the Agent reruns the same command. |
 | | `bridge-deposit-eth` | Bridge ETH L1→L2 via L1StandardBridge (`amb bridge-deposit-eth <wallet_address> <value_eth> [recipient]`) |
 | **Bridge** | `bridge-usdc` | Move Ethereum USDC → Base USDC via CCTP (`amb bridge-usdc <wallet_address> [amount] [--fast] [--wait]`). Amount is **decimal USDC** (`50`), unlike `deposit-add`. Omit the amount to resume. |
 | | `bridge-usdc-status` | Read bridge job state (pure local read, no network) |
@@ -185,8 +211,10 @@ node ${SKILL_DIR}/scripts/install.js
 | | `coupon-detail` | Show one owned coupon |
 | | `coupon-register` | Register a case-sensitive promotion code |
 | | `coupon-available` | Find coupons valid for one route/product/card quote |
-| **Auth** | `siwe-request-message` | Generate SIWE message |
-| | `siwe-submit` | Login with signed SIWE |
+| **Auth** | `siwe-request-message` | Generate a Built-in Privy legacy SIWE message; never use for MetaMask login |
+| | `siwe-submit` | Complete Built-in Privy legacy SIWE login |
+| | `siwe-request-typed` | Generate the typed-data login challenge preferred for MetaMask |
+| | `typed-submit` | Exchange a signed typed-data login challenge for the cached JWT |
 | | `phone-verify-check` | Check phone verification status |
 | | `phone-verify-start` | Send OTP |
 | | `phone-verify-confirm` | Confirm OTP |
