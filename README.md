@@ -266,7 +266,9 @@ Sign out of the member account (wallet state is untouched):
 amb logout
 ```
 
-For crypto wallet setup (`amb wallet-setup` / `amb wallet-add-external`) and the full ride/tip/chat command surface, see `SKILL.md` and `references/`.
+For crypto wallet setup (Built-in Privy via `amb wallet-setup`, or MetaMask via
+`amb wallet-connect-metamask`) and the full ride/tip/chat command surface, see
+`SKILL.md` and `references/`.
 
 ## State Layout
 
