@@ -20,7 +20,11 @@ var SCALAR_KEYS = {
   AMB_RIDE_STATE_DIR: "stateDir",
   AMB_RIDE_PASSPHRASE: "passphrase",
   AMB_RIDE_LOG_LEVEL: "logLevel",
-  AMB_RIDE_OPENCLAW_CLI: "openclawCli"
+  AMB_RIDE_OPENCLAW_CLI: "openclawCli",
+  AMB_RIDE_NOTIFY_WEBHOOK_URL: "notifyWebhookUrl",
+  AMB_RIDE_NOTIFY_WEBHOOK_SECRET: "notifyWebhookSecret",
+  AMB_RIDE_NOTIFY_TELEGRAM_BOT_TOKEN: "notifyTelegramBotToken",
+  AMB_RIDE_NOTIFY_TELEGRAM_CHAT_ID: "notifyTelegramChatId"
 };
 var RPC_KEY = /^AMB_RIDE_RPC_URL_([A-Z0-9_]+)$/;
 var NETWORK_NAME = /^[A-Z0-9]+(?:_[A-Z0-9]+)*$/;
@@ -111,12 +115,244 @@ function selectDeliver(env = process.env) {
   return "stdout";
 }
 
+// src/lib/events/event-phrase.ts
+var STATUS_PHRASE = {
+  WAITPAY: "waiting for payment",
+  PAYCONFIRMED: "payment confirmed, matching a driver",
+  PENDING: "searching for a driver",
+  MATCHED: "a driver candidate was found",
+  CONFIRMED: "the match was confirmed",
+  ASSIGNED: "a driver is assigned and on the way",
+  PICKUP: "the driver is on the way to the pickup point",
+  PICKUP_ARRIVED: "the driver has arrived at the pickup point",
+  INUSE: "the ride is in progress",
+  FINISHED: "the ride completed successfully",
+  NOT_MATCHED: "no driver was found",
+  CANCELED: "the ride was cancelled",
+  ACCIDENT_CANCELED: "the ride was cancelled due to an accident",
+  USER_CANCELED: "cancelled by the rider",
+  USER_CANCELED_BEFORE_CALL: "cancelled by the rider before matching",
+  USER_CANCELED_NO_FREE: "cancelled by the rider (cancellation fee charged)",
+  DRIVER_CANCELED: "cancelled by the driver",
+  DRIVER_CANCELED_RECALLABLE: "cancelled by the driver (can re-request)",
+  COMPANY_CANCELED: "cancelled by the operator",
+  COMPANY_CANCELED_RECALLABLE: "cancelled by the operator (can re-request)",
+  EXPIRED: "the request expired (no driver found)",
+  EXPIRED_RECALLABLE: "the request expired (can re-request)",
+  EXPIRED_BEFORE_PAY: "the payment window expired",
+  ERROR_PAYMENT: "a payment error occurred",
+  ERROR: "an unexpected error occurred"
+};
+function phraseFor(status, statusMessage) {
+  const msg = statusMessage?.trim();
+  if (msg && msg.length > 0) return msg;
+  return STATUS_PHRASE[status] ?? status;
+}
+var CURRENCY_SYMBOL = {
+  KRW: "\u20A9",
+  USD: "$",
+  SGD: "S$",
+  VND: "\u20AB"
+};
+function formatTipAmount(amount, currency) {
+  const n = amount.toLocaleString("en-US");
+  const sym = CURRENCY_SYMBOL[currency];
+  return sym ? `${sym}${n}` : `${n} ${currency}`;
+}
+
+// src/scripts/_internal/render-notification.ts
+var RETRYABLE = /* @__PURE__ */ new Set([
+  "EXPIRED",
+  "EXPIRED_RECALLABLE",
+  "NOT_MATCHED",
+  "DRIVER_CANCELED_RECALLABLE",
+  "COMPANY_CANCELED_RECALLABLE"
+]);
+var ASSIGNMENT_STATUSES = /* @__PURE__ */ new Set(["MATCHED", "CONFIRMED", "ASSIGNED", "PICKUP"]);
+function sentenceCase(s) {
+  return s.length ? s[0].toUpperCase() + s.slice(1) : s;
+}
+function ensurePeriod(s) {
+  return /[.!?…"'」]$/.test(s) ? s : `${s}.`;
+}
+function driverLine(d) {
+  const colorModel = [d.carColor, d.carModel].filter(Boolean).join(" ").trim();
+  const parts = [];
+  if (colorModel) parts.push(colorModel);
+  if (d.carPlate) parts.push(`plate ${d.carPlate}`);
+  const vehicle = parts.join(", ");
+  return `\u{1F697} Driver assigned: ${d.name || "your driver"}${vehicle ? ` \u2014 ${vehicle}` : ""}.`;
+}
+function renderNotification(ev) {
+  if (ev.kind === "driver_chat") {
+    const c = ev.payload["content"] ?? "";
+    return `\u{1F4AC} Driver: "${c}"`;
+  }
+  const status = String(ev.payload["status"] ?? "");
+  const statusMessage = ev.payload["statusMessage"]?.trim();
+  const shareUrl = ev.payload["rideShareUrl"];
+  const withShare = (line) => shareUrl ? `${line}
+Track live: ${shareUrl}` : line;
+  const driver = ev.payload["driver"];
+  if (!ev.terminal && ASSIGNMENT_STATUSES.has(status) && driver && (driver.name || driver.carPlate)) {
+    return withShare(driverLine(driver));
+  }
+  if (ev.terminal) {
+    if (status === "FINISHED") {
+      const completion = statusMessage ? ensurePeriod(sentenceCase(statusMessage)) : "Ride completed.";
+      const tip = ev.payload["tip"];
+      const tipInvitation = tip ? ` Tips from ${formatTipAmount(tip.minAmount, tip.currency)} are welcome \u2014 just tell me if you'd like to add one.` : "";
+      return `\u2705 ${completion}${tipInvitation} If you'd like your receipt, just ask.`;
+    }
+    const phrase2 = ensurePeriod(sentenceCase(phraseFor(status, statusMessage)));
+    return RETRYABLE.has(status) ? `\u26A0\uFE0F ${phrase2} Say "call again" to retry.` : `\u26A0\uFE0F ${phrase2}`;
+  }
+  if (!statusMessage) {
+    switch (status) {
+      case "PICKUP":
+        return withShare("\u{1F697} Your driver is on the way to the pickup point.");
+      case "PICKUP_ARRIVED":
+        return withShare("\u{1F4CD} Your driver has arrived at the pickup point.");
+      case "INUSE":
+        return withShare("\u{1F6E3}\uFE0F Ride started \u2014 heading to your destination.");
+    }
+  }
+  const phrase = phraseFor(status, statusMessage);
+  if (!phrase) return ev.prompt || "Ride update.";
+  return withShare(ensurePeriod(sentenceCase(phrase)));
+}
+
 // src/scripts/_internal/deliver-stdout.ts
 var deliverStdout = async (ev) => {
   await new Promise((resolve, reject) => {
     process.stdout.write(ev.prompt + "\n", (err) => err ? reject(err) : resolve());
   });
 };
+function contextOnlyFraming(ev) {
+  return `[relay] Ride status already sent to the user directly (seq ${ev.seq}). Context only \u2014 do NOT send any message. ${ev.prompt}`;
+}
+var writeLine = (line) => new Promise((resolve, reject) => {
+  process.stdout.write(line, (err) => err ? reject(err) : resolve());
+});
+function makeSinkThenStdoutDeliver(sink, write = writeLine) {
+  const pushedSeqs = /* @__PURE__ */ new Set();
+  return async (ev) => {
+    let sinkOk = pushedSeqs.has(ev.seq);
+    if (!sinkOk) {
+      try {
+        sinkOk = await sink.push(renderNotification(ev), ev);
+      } catch {
+        sinkOk = false;
+      }
+      if (sinkOk) pushedSeqs.add(ev.seq);
+    }
+    await write(sinkOk ? contextOnlyFraming(ev) + "\n" : ev.prompt + "\n");
+  };
+}
+
+// src/scripts/_internal/deliver-sink.ts
+import { createHmac } from "crypto";
+var DEFAULT_SINK_TIMEOUT_MS = 5e3;
+function makeWebhookSink(o) {
+  const doFetch = o.fetchImpl ?? fetch;
+  const timeoutMs = o.timeoutMs ?? DEFAULT_SINK_TIMEOUT_MS;
+  return {
+    async push(rendered, ev) {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+      try {
+        const body = JSON.stringify({
+          rideId: ev.rideId,
+          seq: ev.seq,
+          kind: ev.kind,
+          status: ev.payload?.["status"] ?? null,
+          terminal: ev.terminal,
+          ts: ev.ts,
+          text: rendered
+        });
+        const headers = { "Content-Type": "application/json" };
+        if (o.secret) {
+          headers["X-Amb-Ride-Signature"] = "sha256=" + createHmac("sha256", o.secret).update(body).digest("hex");
+        }
+        const res = await doFetch(o.url, { method: "POST", headers, body, signal: ctrl.signal });
+        return res.ok;
+      } catch {
+        return false;
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+  };
+}
+function makeTelegramSink(o) {
+  const doFetch = o.fetchImpl ?? fetch;
+  const timeoutMs = o.timeoutMs ?? DEFAULT_SINK_TIMEOUT_MS;
+  const url = `https://api.telegram.org/bot${o.botToken}/sendMessage`;
+  return {
+    async push(rendered) {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+      try {
+        const res = await doFetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ chat_id: o.chatId, text: rendered }),
+          signal: ctrl.signal
+        });
+        if (!res.ok) return false;
+        const json = await res.json();
+        return json.ok === true;
+      } catch {
+        return false;
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+  };
+}
+var CONSECUTIVE_FAILURE_LATCH = 3;
+function withLatch(inner, threshold = CONSECUTIVE_FAILURE_LATCH) {
+  let consecutiveFailures = 0;
+  let latched = false;
+  return {
+    async push(rendered, ev) {
+      if (latched) return false;
+      const ok = await inner.push(rendered, ev);
+      if (ok) {
+        consecutiveFailures = 0;
+      } else if (++consecutiveFailures >= threshold) {
+        latched = true;
+      }
+      return ok;
+    }
+  };
+}
+function makeCompositeSink(sinks) {
+  return {
+    async push(rendered, ev) {
+      const results = await Promise.all(sinks.map((s) => s.push(rendered, ev)));
+      return results.some(Boolean);
+    }
+  };
+}
+function buildSinksFromEnv(env, deps = {}) {
+  const sinks = [];
+  if (env.notifyWebhookUrl) {
+    sinks.push(withLatch(makeWebhookSink({
+      url: env.notifyWebhookUrl,
+      secret: env.notifyWebhookSecret,
+      fetchImpl: deps.fetchImpl
+    })));
+  }
+  if (env.notifyTelegramBotToken && env.notifyTelegramChatId) {
+    sinks.push(withLatch(makeTelegramSink({
+      botToken: env.notifyTelegramBotToken,
+      chatId: env.notifyTelegramChatId,
+      fetchImpl: deps.fetchImpl
+    })));
+  }
+  return sinks;
+}
 
 // src/scripts/_internal/deliver-openclaw.ts
 import { closeSync, existsSync, fstatSync, openSync, readSync, realpathSync } from "fs";
@@ -651,113 +887,6 @@ function makeInjectQueue(o) {
 // src/scripts/_internal/deliver-fastpath.ts
 import { execFile as execFile2 } from "child_process";
 
-// src/lib/events/event-phrase.ts
-var STATUS_PHRASE = {
-  WAITPAY: "waiting for payment",
-  PAYCONFIRMED: "payment confirmed, matching a driver",
-  PENDING: "searching for a driver",
-  MATCHED: "a driver candidate was found",
-  CONFIRMED: "the match was confirmed",
-  ASSIGNED: "a driver is assigned and on the way",
-  PICKUP: "the driver is on the way to the pickup point",
-  PICKUP_ARRIVED: "the driver has arrived at the pickup point",
-  INUSE: "the ride is in progress",
-  FINISHED: "the ride completed successfully",
-  NOT_MATCHED: "no driver was found",
-  CANCELED: "the ride was cancelled",
-  ACCIDENT_CANCELED: "the ride was cancelled due to an accident",
-  USER_CANCELED: "cancelled by the rider",
-  USER_CANCELED_BEFORE_CALL: "cancelled by the rider before matching",
-  USER_CANCELED_NO_FREE: "cancelled by the rider (cancellation fee charged)",
-  DRIVER_CANCELED: "cancelled by the driver",
-  DRIVER_CANCELED_RECALLABLE: "cancelled by the driver (can re-request)",
-  COMPANY_CANCELED: "cancelled by the operator",
-  COMPANY_CANCELED_RECALLABLE: "cancelled by the operator (can re-request)",
-  EXPIRED: "the request expired (no driver found)",
-  EXPIRED_RECALLABLE: "the request expired (can re-request)",
-  EXPIRED_BEFORE_PAY: "the payment window expired",
-  ERROR_PAYMENT: "a payment error occurred",
-  ERROR: "an unexpected error occurred"
-};
-function phraseFor(status, statusMessage) {
-  const msg = statusMessage?.trim();
-  if (msg && msg.length > 0) return msg;
-  return STATUS_PHRASE[status] ?? status;
-}
-var CURRENCY_SYMBOL = {
-  KRW: "\u20A9",
-  USD: "$",
-  SGD: "S$",
-  VND: "\u20AB"
-};
-function formatTipAmount(amount, currency) {
-  const n = amount.toLocaleString("en-US");
-  const sym = CURRENCY_SYMBOL[currency];
-  return sym ? `${sym}${n}` : `${n} ${currency}`;
-}
-
-// src/scripts/_internal/render-notification.ts
-var RETRYABLE = /* @__PURE__ */ new Set([
-  "EXPIRED",
-  "EXPIRED_RECALLABLE",
-  "NOT_MATCHED",
-  "DRIVER_CANCELED_RECALLABLE",
-  "COMPANY_CANCELED_RECALLABLE"
-]);
-var ASSIGNMENT_STATUSES = /* @__PURE__ */ new Set(["MATCHED", "CONFIRMED", "ASSIGNED", "PICKUP"]);
-function sentenceCase(s) {
-  return s.length ? s[0].toUpperCase() + s.slice(1) : s;
-}
-function ensurePeriod(s) {
-  return /[.!?…"'」]$/.test(s) ? s : `${s}.`;
-}
-function driverLine(d) {
-  const colorModel = [d.carColor, d.carModel].filter(Boolean).join(" ").trim();
-  const parts = [];
-  if (colorModel) parts.push(colorModel);
-  if (d.carPlate) parts.push(`plate ${d.carPlate}`);
-  const vehicle = parts.join(", ");
-  return `\u{1F697} Driver assigned: ${d.name || "your driver"}${vehicle ? ` \u2014 ${vehicle}` : ""}.`;
-}
-function renderNotification(ev) {
-  if (ev.kind === "driver_chat") {
-    const c = ev.payload["content"] ?? "";
-    return `\u{1F4AC} Driver: "${c}"`;
-  }
-  const status = String(ev.payload["status"] ?? "");
-  const statusMessage = ev.payload["statusMessage"]?.trim();
-  const shareUrl = ev.payload["rideShareUrl"];
-  const withShare = (line) => shareUrl ? `${line}
-Track live: ${shareUrl}` : line;
-  const driver = ev.payload["driver"];
-  if (!ev.terminal && ASSIGNMENT_STATUSES.has(status) && driver && (driver.name || driver.carPlate)) {
-    return withShare(driverLine(driver));
-  }
-  if (ev.terminal) {
-    if (status === "FINISHED") {
-      const completion = statusMessage ? ensurePeriod(sentenceCase(statusMessage)) : "Ride completed.";
-      const tip = ev.payload["tip"];
-      const tipInvitation = tip ? ` Tips from ${formatTipAmount(tip.minAmount, tip.currency)} are welcome \u2014 just tell me if you'd like to add one.` : "";
-      return `\u2705 ${completion}${tipInvitation} If you'd like your receipt, just ask.`;
-    }
-    const phrase2 = ensurePeriod(sentenceCase(phraseFor(status, statusMessage)));
-    return RETRYABLE.has(status) ? `\u26A0\uFE0F ${phrase2} Say "call again" to retry.` : `\u26A0\uFE0F ${phrase2}`;
-  }
-  if (!statusMessage) {
-    switch (status) {
-      case "PICKUP":
-        return withShare("\u{1F697} Your driver is on the way to the pickup point.");
-      case "PICKUP_ARRIVED":
-        return withShare("\u{1F4CD} Your driver has arrived at the pickup point.");
-      case "INUSE":
-        return withShare("\u{1F6E3}\uFE0F Ride started \u2014 heading to your destination.");
-    }
-  }
-  const phrase = phraseFor(status, statusMessage);
-  if (!phrase) return ev.prompt || "Ride update.";
-  return withShare(ensurePeriod(sentenceCase(phrase)));
-}
-
 // src/lib/events/event-prompt.ts
 function renderDriver(d) {
   if (!d) return "";
@@ -803,7 +932,7 @@ function renderPrompt(ev) {
 }
 
 // src/scripts/_internal/deliver-fastpath.ts
-var CONSECUTIVE_FAILURE_LATCH = 3;
+var CONSECUTIVE_FAILURE_LATCH2 = 3;
 var SEND_TIMEOUT_MS = 3e4;
 function buildMessageSendArgs(o) {
   return ["message", "send", "--channel", o.channel, "--target", o.target, "-m", o.text, "--json"];
@@ -828,20 +957,33 @@ ${String(stderr).slice(0, 500)}`));
     });
   });
 }
+function makeOpenclawSink(o) {
+  return {
+    async push(rendered) {
+      try {
+        await o.runSend(buildMessageSendArgs({ channel: o.channel, target: o.target, text: rendered }));
+        return true;
+      } catch {
+        return false;
+      }
+    }
+  };
+}
 function makeFastpathDeliver(o) {
   const now = o.now ?? (() => (/* @__PURE__ */ new Date()).toISOString());
-  let consecutiveFailures = 0;
   let latched = false;
+  let consecutiveFailures = 0;
   return async (ev) => {
     const readTs = now();
     if (!latched) {
       const sendStartTs = now();
+      let delivered = false;
       try {
-        const { messageId } = await o.runSend(buildMessageSendArgs({
-          channel: o.target.channel,
-          target: o.target.target,
-          text: renderNotification(ev)
-        }));
+        delivered = await o.sink.push(renderNotification(ev), ev);
+      } catch {
+        delivered = false;
+      }
+      if (delivered) {
         consecutiveFailures = 0;
         o.trace({
           seq: ev.seq,
@@ -852,15 +994,12 @@ function makeFastpathDeliver(o) {
           readTs,
           path: "fast",
           sendStartTs,
-          sendOkTs: now(),
-          telegramMessageId: messageId
+          sendOkTs: now()
         });
         o.enqueueInject(ev.seq, buildInjectText(ev));
         return;
-      } catch {
-        consecutiveFailures++;
-        if (consecutiveFailures >= CONSECUTIVE_FAILURE_LATCH) latched = true;
       }
+      if (++consecutiveFailures >= CONSECUTIVE_FAILURE_LATCH2) latched = true;
     }
     const fbStartTs = now();
     await o.legacyDeliver(ev);
@@ -1180,7 +1319,9 @@ async function runRideRelay(rideId, deps) {
     const cursorFile2 = path8.join(stateRoot(), "cursors", `stdout-${rideId}`);
     fs7.mkdirSync(path8.dirname(cursorFile2), { recursive: true });
     try {
-      const r = await deps.runRelayLoop({ rideId, cursorFile: cursorFile2, deliver: deliverStdout, oneShot: deps.oneShot });
+      const sinks = buildSinksFromEnv(readRuntimeEnv());
+      const deliver2 = sinks.length === 0 ? deliverStdout : makeSinkThenStdoutDeliver(makeCompositeSink(sinks));
+      const r = await deps.runRelayLoop({ rideId, cursorFile: cursorFile2, deliver: deliver2, oneShot: deps.oneShot });
       return r.exitCode;
     } catch (e) {
       if (isRelaySpawnError(e)) return reportSpawnFailure(e);
@@ -1271,9 +1412,15 @@ async function runRideRelay(rideId, deps) {
         onRecord: (rec) => trace({ phase: "context", ...rec })
       });
       injectQueue = q;
-      deliver2 = withErrorLog(makeFastpathDeliver({
-        target: channelTarget,
+      const openclawSink = makeOpenclawSink({
         runSend: deps.runSend ?? defaultRunSend(cli),
+        channel: channelTarget.channel,
+        target: channelTarget.target
+      });
+      const externalSinks = buildSinksFromEnv(readRuntimeEnv());
+      const sink = makeCompositeSink([withLatch(openclawSink), ...externalSinks]);
+      deliver2 = withErrorLog(makeFastpathDeliver({
+        sink,
         legacyDeliver: baseDeliver,
         enqueueInject: (seq, text) => q.push(seq, text),
         trace

@@ -303,6 +303,7 @@ The defaults work without any env vars. Only override in special cases.
 | `AMB_RIDE_OPENCLAW_CLI` | `openclaw` | OpenClaw executable override. |
 | `AMB_RIDE_RPC_URL_<NETWORK>` | build default | Per-network RPC override (for example, `AMB_RIDE_RPC_URL_BASE_SEPOLIA`). |
 | `AMB_TELEMETRY_SERVICE_URL` | baked build URL | Development-only proxy override for telemetry E2E/local service checks. Staging and production reject a different endpoint. |
+| `AMB_RIDE_NOTIFY_WEBHOOK_URL` | (unset) | Optional webhook for out-of-band ride alarms; ride-relay POSTs each alarm as JSON. See `SKILL.md` → "Out-of-band ride alarms" for webhook secret and Telegram configuration. |
 
 ## Repository layout
 
