@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 // <define:__AMB_INSTALL_BUILD_CONFIG__>
-var define_AMB_INSTALL_BUILD_CONFIG_default = { mode: "npm", repoBranch: "main", expectedCliSha: "e0615801", minimumCliVersion: "1.3.0" };
+var define_AMB_INSTALL_BUILD_CONFIG_default = { mode: "npm", repoBranch: "main", expectedCliSha: "df788765", minimumCliVersion: "1.3.0" };
 
 // src/scripts/install.ts
 import os2 from "os";

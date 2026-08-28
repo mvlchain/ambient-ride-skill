@@ -1,6 +1,6 @@
 ---
 name: ride
-version: 1.2.0
+version: 1.3.0
 description: Ambient Ride skill for TADA/Throo ride-hailing and taxi service. Wallet, deposit, collateral, ride, payment, chat, and tipping workflows.
 metadata:
   openclaw:
@@ -334,6 +334,27 @@ For the full event schema, reconnect procedure, exit-code semantics, and related
 **Diagnosing a monitoring failure (dev/staging only):** If ride status or driver-chat events aren't reaching the session, run `amb debug <request_id>`. It bundles the always-on diagnostic artifacts — monitor trace, event log, relay-error log, process locks, cursors — plus a summary into `~/.amb/debug/tada-debug-*.zip`. (Not available on prod builds.)
 
 **Do not send that zip anywhere on the user's behalf.** It carries their ride: pickup and drop-off, timestamps, ride and account identifiers, driver chat. Tell the user where the file is, say what is in it, and let them decide who sees it. If they ask you to share it, that is their call to make with the contents named out loud first.
+
+### Out-of-band ride alarms (optional)
+
+By default a Flavor A harness (Claude Code, codex, Hermes, …) surfaces ride
+status through the agent's own context. To also push alarms out-of-band —
+so the user is notified even when they are not watching the session — set any
+of these environment variables; the relay fans out to every configured sink:
+
+- `AMB_RIDE_NOTIFY_WEBHOOK_URL` — POST each alarm as JSON to this URL.
+- `AMB_RIDE_NOTIFY_WEBHOOK_SECRET` — optional; when set, the body is signed
+  `X-Amb-Ride-Signature: sha256=<hmac>` so the receiver can verify it.
+- `AMB_RIDE_NOTIFY_TELEGRAM_BOT_TOKEN` + `AMB_RIDE_NOTIFY_TELEGRAM_CHAT_ID` —
+  push straight to a Telegram chat via the Bot API.
+
+When a sink delivers an event, the in-band line is marked context-only so the
+agent does not double-notify; if every sink fails, the agent notifies in-band
+as a fallback. Under OpenClaw, a session with a resolvable channel target
+(e.g. a Telegram-born session) always has its native channel as a sink, and
+these vars add extra destinations on top. Sessions with no derivable channel
+target (CLI/API-launched, operator TUI) fall back to in-band-only delivery
+regardless of these vars.
 
 ## Member ride: card payment auto-resolution
 
