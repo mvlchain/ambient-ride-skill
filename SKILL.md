@@ -1,7 +1,7 @@
 ---
 name: ride
-version: 1.3.0
-description: Ambient Ride skill for TADA/Throo ride-hailing and taxi service. Wallet, deposit, collateral, ride, payment, chat, and tipping workflows.
+version: 1.4.0
+description: Ambient Ride skill for TADA/Throo ride-hailing and taxi service. Wallet, USDC bridge status and recovery, deposit, collateral, ride, payment, chat, and tipping workflows; use it for wallet balances, starting and resuming USDC bridges, and bridge progress.
 metadata:
   openclaw:
     emoji: "🚕"
@@ -11,10 +11,40 @@ metadata:
     envVars:
       - name: AMB_RIDE_STATE_DIR
         required: false
-        description: Override the Ambient Ride state directory (default ~/.amb).
+        description: Override the Ambient Ride state root containing the ride database, logs, diagnostics, and any built-in wallet keys.
+      - name: AMB_RIDE_PASSPHRASE
+        required: false
+        description: Decrypt local built-in wallet key material; the installer stores it beside the encrypted keys under the user-owned state root.
+      - name: AMB_RIDE_LOG_LEVEL
+        required: false
+        description: Control local runtime log verbosity; operational ride identifiers can appear in debug logs.
       - name: AMB_RIDE_OPENCLAW_CLI
         required: false
         description: Path to the openclaw CLI used for ride event delivery.
+      - name: AMB_RIDE_NOTIFY_WEBHOOK_URL
+        required: false
+        description: Send rendered ride alarms to a user-configured external webhook.
+      - name: AMB_RIDE_NOTIFY_WEBHOOK_SECRET
+        required: false
+        description: Sign webhook bodies with a host-injected HMAC secret.
+      - name: AMB_RIDE_NOTIFY_TELEGRAM_BOT_TOKEN
+        required: false
+        description: Authenticate optional ride-alarm delivery through the third-party Telegram Bot API.
+      - name: AMB_RIDE_NOTIFY_TELEGRAM_CHAT_ID
+        required: false
+        description: Select the Telegram chat that receives optional ride alarms.
+      - name: AMB_RIDE_RPC_URL_BASE
+        required: false
+        description: Override the BASE JSON-RPC endpoint used by wallet and payment operations.
+      - name: AMB_RIDE_RPC_URL_BASE_SEPOLIA
+        required: false
+        description: Override the BASE_SEPOLIA JSON-RPC endpoint used by test wallet and payment operations.
+      - name: AMB_RIDE_RPC_URL_ETHEREUM
+        required: false
+        description: Override the ETHEREUM JSON-RPC endpoint used by bridge and deposit operations.
+      - name: AMB_RIDE_RPC_URL_ETHEREUM_SEPOLIA
+        required: false
+        description: Override the ETHEREUM_SEPOLIA JSON-RPC endpoint used by test bridge and deposit operations.
       - name: AMB_TELEMETRY_SERVICE_URL
         required: false
         description: Development-only telemetry proxy override for local E2E; staging and production keep the baked endpoint.
@@ -58,6 +88,29 @@ These rules override any other guidance and apply to every turn.
 
 **No routing / environment speculation.** Do not speculate about backend routing, upstream hostnames, or which environment the driver app is looking at. You have no visibility into dispatch-server internals, and you already know the ride's mode — you selected member (card) or crypto when you booked it. Shared upstream hostnames are never evidence of anything: never infer that a ride "leaked to crypto" (or to any other path) from a hostname. When a ride expires with no driver, the only honest statement is "no driver matched in time." State any uncertain cause as a hypothesis ("I'm not certain, but one possibility is…"), never as a diagnosis.
 
+**Keep cross-chain balances distinct.** When answering from `wallet-balance`, name every returned network with its decimal amount and symbol; never collapse same-symbol rows into one total or omit the payment/source-chain split. If Base USDC is short while Ethereum USDC can cover it, explicitly call the remedy a USDC bridge from Ethereum to Base rather than a vague top-up or transfer.
+
+**Every non-terminal bridge result is recovery-critical, whether the transfer was just started or
+already existed.** For an existing transfer, read it with `amb bridge-usdc-status
+<wallet_address>` before answering. Report the command's decimal amount and symbol, the current
+stage, server continuation, a check later path, and the same existing job's CLI fallback;
+explicitly say that fallback continues the
+existing job and never start a replacement transfer. Only `COMPLETED` is complete. The detailed
+USDC bridge section below defines the exact fields and failure recovery wording; this guardrail
+makes those obligations impossible to miss in a long skill document. Treat the amount and exact source-to-destination chain route,
+current stage, server continuation, check-later command, same-job fallback, and no-new-transfer
+warning as a mandatory response checklist before ending the turn. Every in-progress bridge answer
+must copy every `required_user_message` line verbatim before any extra explanation. Those lines
+include the response's exact current stage, server continuation, literal `status_command`, same-job
+`next_step` fallback, and "Do not start a new transfer." Do not merge, paraphrase, or omit them.
+Check later with the response's literal `status_command`. If it is still pending, the literal
+`next_step` resumes that same existing job.
+
+**A `FAILED` bridge with `funds_mid_flight: true` is also recovery-critical.** Explicitly tell the
+user that their funds are safe and not lost, and copy the product's recovery text verbatim so the
+local status command and support handoff remain actionable. Do not reduce that payload to a generic
+failure or support message.
+
 **Acknowledge before a long booking turn.** When a ride request means you are about to run the multi-step booking flow (place resolution → `ride-search` → `ride-request` → start relay), first send a short acknowledgement that you are getting their car and will be a moment, then do the work — including when no place is remembered (the unknown-place path is the *slow* case, so it needs this more, not less). Decide at the commit point, right after the `amb whoami` readiness check: if the honest response this turn is a question you can raise now — not signed in (start the login flow), no destination given, or a request you already know is ambiguous — ask it and skip the acknowledgement, since that question is itself the immediate reply. A disambiguation that only surfaces mid-flow (a pickup choice returned by `place-search`, a `needs_card_selection` prompt from `ride-search`) is normal progress and rightly follows the acknowledgement you already sent — do not withhold the ack to avoid it. On OpenClaw your reply text is not delivered until the turn ends, so the acknowledgement MUST be an actually-sent message: `openclaw message send --channel <this channel> --account default --target <this chat id> --message "<ack>" --json` (resolve `<this channel>` / `<this chat id>` from the current message context; use `--message`, never `--caption` or `--reply-to` — both fail). On streaming runtimes (Claude Code / codex) emitting the line before your tool calls is enough — no separate send. Keep it to one short sentence in the conversation's language, stating progress only, never a result the booking has not produced yet. The acknowledgement is best-effort: if the send fails, book anyway.
 
 ## Answering user questions about this skill
@@ -66,7 +119,7 @@ When the user asks **what this skill is, how to get started, why it works the wa
 
 ## First-run + Initial Setup
 
-**Installing needs the user's OK — this rule governs every path below.** Running an installer writes the `amb` binary into `~/.local/bin` and local wallet/database state under `~/.amb`, including the passphrase that encrypts wallet keys. Before the first install in a session, explain this briefly and ask the user to confirm. Ask only once per session; prior approval or a successful installer run covers every path below. A direct slash-command invocation counts as approval. If the user declines, stop ride setup and explain that they can resume later.
+**Installing needs the user's OK — this rule governs every path below.** The public npm build installs the `amb` package globally. Internal dev/staging builds first check the managed PATH directory, then create a sibling `~/.amb-cli-bootstrap-*` staging directory, clone the CLI and run npm there, and may run `git fetch` plus `git reset --hard` only in that staged clone when retrying SHA verification. After `amb install` succeeds, the installer temporarily moves any existing `~/.amb/cli` and PATH-visible `~/.local/bin/amb` symlink to transaction-owned `.replaced-*` paths, promotes the staged CLI, creates the managed symlink, and verifies its resolved path before committing. A successful commit recursively removes only the validated bootstrap and owned replacement paths. An interrupted transaction retains a private marker; a later installer run validates it and attempts to resume forward when the recorded state can be reconciled safely, while unreconcilable, invalid, or mismatched recovery state is preserved and fails closed. Every channel's `amb install` writes local ride/database state under `~/.amb` and, only when the user chooses the built-in wallet, stores encrypted wallet keys with their local decryption passphrase. Ride monitoring later uses the documented background relay, and optional webhook/Telegram delivery remains off unless configured. Before the first install in a session, explain the applicable package/repository, PATH, filesystem, background-process, and external-network effects and ask the user to confirm. Ask only once per session; prior approval or a successful installer run covers every path below. A direct slash-command invocation counts as approval. If the user declines, stop ride setup and explain that they can resume later.
 
 If `amb` exits with `command not found` (exit 127), the binary is not on `PATH` — this does **not** mean the skill is unusable. Get the user's OK as above, then run the installer; it is idempotent and safe to re-run: `node ${SKILL_DIR}/scripts/install.js`. Outcomes:
 - `status: installed` → a fresh install completed.
@@ -88,8 +141,8 @@ test -s "${AMB_RIDE_STATE_DIR:-$HOME/.amb}/state/data/.installed"
 
 After installation is confirmed, determine onboarding state with `amb whoami` (JSON) and continue with the matching branch:
 
-- If `mode` is `tada` or `wallet`, onboarding is already done — proceed. **But `mode: tada` alone does NOT mean the member is signed in** — it only means a member account is registered on this machine. Check the `authenticated` field: if `authenticated` is **`false`** (`auth_state: "needs_login"`), the session is not usable (expired/not finished) — do **not** proceed as logged-in. Tell the user their TADA/Throo session isn't active and run `amb login --no-wait` (sign-in flow below) before any member action. Re-entering a 4-digit code from an earlier attempt won't work (that code has expired) — always start a fresh `amb login`. When `authenticated` is `true` (`auth_state: "active"`), the session is usable (a live token, or a refresh that renews automatically) — proceed. Additionally, if `mode` is `tada` and `has_wallet` is **`false`** (an existing member from before wallet provisioning shipped), you may offer to provision their wallet now with the **Wallet setup** flow below — but this is **optional**: the member can skip and continue, and you must **not** block ride actions on it.
-- If `mode` is `null` (onboarding), **offer the wallet choice and complete the selected Wallet setup flow first, then choose a mode.** Every agent holds a wallet regardless of mode — it does not change ride pricing or payment. Once the selected wallet is ready and `member_available` is **`true`**, ask the user which mode to use — this choice drives ride **pricing** and backend (member and crypto are priced differently), so keep it explicit:
+- If `mode` is `tada` or `wallet`, onboarding is already done — proceed. **But `mode: tada` alone does NOT mean the member is signed in** — it only means a member account is registered on this machine. Check the `authenticated` field: if `authenticated` is **`false`** (`auth_state: "needs_login"`), the session is not usable (expired/not finished) — do **not** proceed as logged-in. Tell the user their TADA/Throo session isn't active and run `amb login --no-wait` (sign-in flow below) before any member action. Re-entering a 4-digit code from an earlier attempt won't work (that code has expired) — always start a fresh `amb login`. When `authenticated` is `true` (`auth_state: "active"`), the session is usable (a live token, or a refresh that renews automatically) — proceed. A member does not need a wallet for login, search, booking, or card payment, so do not offer or require one merely because `has_wallet` is **`false`**. Enter **Wallet setup** only when the user explicitly asks to create/connect a wallet or requests a wallet-dependent feature.
+- If `mode` is `null` (onboarding) and `member_available` is **`true`**, ask which account/payment path the user wants **before** asking about wallet providers. This choice drives ride **pricing** and backend (member and crypto are priced differently), so keep it explicit:
   - **A. TADA/Throo member account** — sign in with the TADA/Throo app:
     ```bash
     amb login --no-wait
@@ -112,9 +165,10 @@ After installation is confirmed, determine onboarding state with `amb whoami` (J
     - `status: "logged_in"` → login succeeded. Confirm to the user that they're signed in to their **TADA/Throo** member account (always say "TADA/Throo", not just "TADA"). Greet them with a human-friendly identifier if one is set: run `amb whoami` and use its `identity.display_name`, or else `identity.phone`. Do **not** surface the internal `member_id` (a UUID). If neither is set, just confirm the sign-in without an identifier.
     - `status: "invalid_code"` → ask the user to re-read the code and run `login-verify` again.
     - `status: "session_expired"` → start over from `amb login --no-wait`.
-  - **B. Crypto wallet** — nothing more to set up: the wallet you just provisioned is the crypto wallet (it is funded via the normal crypto ride flow at booking time).
-  - **C. Decide later** — proceed on the wallet (crypto) for now, and remind the user they can sign in to a TADA/Throo membership anytime; a mode must be settled before booking a ride.
-- If `mode` is `null` and `member_available` is **`false`**, this build supports crypto only — offer and complete the **Wallet setup** choice below, then proceed on the wallet (do not mention TADA/Throo member mode).
+    Start this command directly. Do not run wallet setup, wallet status, setup check, SIWE, collateral, or wallet payment commands before or during member onboarding. Successful login creates only member state; a wallet is not required.
+  - **B. Crypto wallet** — continue to **Wallet setup** below. Ask the user to choose a provider before running any provisioning command; the wallet is funded via the normal crypto ride flow at booking time.
+  - **C. Decide later** — stop without creating member or wallet credentials. The account remains `mode: null`; explain that they must choose member/card or crypto before booking a ride.
+- If `mode` is `null` and `member_available` is **`false`**, this build supports crypto only — explain that member/card payment is unavailable and ask whether to continue with crypto or decide later. Do not mention unsupported member setup and do not provision anything until the user chooses to continue. If they continue, enter **Wallet setup** below and ask which provider they want.
 
 ### Wallet setup
 
@@ -132,13 +186,49 @@ amb wallet-setup --no-wait
 
 **Send the `auth_url` to the user as a markdown link and end your turn there.** The user cannot see any message you have not sent yet, so the approval page cannot be opened while you keep working. Run `amb wallet-setup-verify` only *after* the user tells you they finished the page — it reports the current status and returns at once (do not call it in a loop).
 
-For MetaMask, the Agent runs `amb wallet-connect-metamask`; never tell the user to run an
+For MetaMask, the Agent runs `amb wallet-connect-metamask --json`; never tell the user to run an
 `amb` command. If it returns `status: "approval_pending"`, ask the user only to complete the
 external MetaMask approval and end the turn. After the user confirms, run the identical
-`amb wallet-connect-metamask` command again. It automatically resumes the stored request;
+`amb wallet-connect-metamask --json` command again. It automatically resumes the stored request;
 never start a new request or expose/use an mm polling ID. Continue typed login as documented
 in [Wallet reference](references/wallet.md), with the Agent running every command. If a MetaMask
 typed signature needs external approval, the Agent uses the same exact-command recovery contract.
+After registration, use this exact structured sequence, substituting only values returned by the
+preceding successful command:
+
+```bash
+amb wallet-status --json
+amb siwe-request-typed <wallet_address> <chain_id> --json
+amb wallet-sign <wallet_address> eth_signTypedData_v4 <typed_file> --json
+amb typed-submit <typed_file> <wallet_signature> --json
+```
+
+Use the literal wallet address returned by `amb wallet-status --json` directly in both
+`siwe-request-typed` and `wallet-sign`. Do not use a shell variable or command substitution for that address.
+
+Do not replace `eth_signTypedData_v4` with an invented `--typed-file` flag or omit any positional
+argument. Do not run `--help`, an incomplete usage probe, or a guessed command between these steps.
+Run each successful sequence command once; a failed or ambiguous mutation follows the fail-closed
+rule below, and only explicit `approval_pending` permits the exact-command resume.
+
+Before a wallet-mode ride search, verify collateral and readiness, then use the positional search
+form exactly once:
+
+```bash
+amb deposit-status <wallet_address> --json
+amb setup-check <wallet_address> --json
+amb ride-search <wallet_address> <region> <origin_lat> <origin_lng> <destination_lat> <destination_lng> --json
+```
+
+Do not substitute named coordinate flags for the positional wallet-mode `ride-search` form or probe
+an alternate form.
+
+For MetaMask mutation commands such as `wallet-connect-metamask` and typed signatures, only an
+explicit `status: "approval_pending"` authorizes the identical-command resume above. If a command
+returns `MM_CALL_FAILED`, nonzero, malformed, or otherwise ambiguous output, explain the failure
+and end the turn; do not run the same command again. Apply this fail-closed rule to signing,
+deposit, payment, transfer, and every other MetaMask mutation so an uncertain submission is never
+duplicated.
 
 If the command returns `MM_NOT_INSTALLED`, explain that the MetaMask Agent Wallet CLI is not
 installed or is not on `PATH`, then offer: install it with
@@ -151,7 +241,7 @@ If `amb wallet-status` shows more than one wallet already registered (older inst
 
 For full wallet details (signing strategy, SIWE auth, phone verification, collateral management), read `references/wallet.md`.
 
-**Setup check (run before any ride flow):**
+**Crypto setup check (run before a crypto ride flow):**
 ```bash
 amb setup-check <wallet_address>
 ```
@@ -180,6 +270,9 @@ node ${SKILL_DIR}/scripts/install.js
 > `ride-search`, and all `coupon-*` commands —
 > must be called with `--json` so you can reliably extract
 > `placeId` / coordinates / `typed_data`. All other commands: read the plain text.
+
+When re-favoriting or relabeling an existing local or history row, use `place-favorite` with its `id` or `dedup_key`.
+Do not call `place-save` or send its Google Maps URL again.
 
 ## Available subcommands
 
@@ -218,7 +311,7 @@ node ${SKILL_DIR}/scripts/install.js
 | | `phone-verify-check` | Check phone verification status |
 | | `phone-verify-start` | Send OTP |
 | | `phone-verify-confirm` | Confirm OTP |
-| **Setup** | `setup-check` | Check ride readiness |
+| **Setup** | `setup-check` | Check crypto-wallet ride readiness only; never use for member or undecided onboarding |
 | | `install` | Initial installation |
 | **Place** | `place-search` | Autocomplete place search |
 | | `place-detail` | Get place coordinates |
@@ -311,7 +404,9 @@ Either way the LLM sees `ride_status` events as user-turn messages inside the se
 
 **Hermes extra (agentic relay loop):** Hermes does not have an in-session deliver primitive like OpenClaw. Instead, when a background process completes, Hermes injects a synthetic `[IMPORTANT: Background process … completed. Output: …]` user-turn message on the next agent turn — that is how the relay's stdout reaches the agent. ride-relay self-exits after each batch with `--once`, and you spawn a new relay each turn until terminal status.
 
-1. After `amb ride-pay-confirm` succeeds, spawn the first relay:
+1. At the mode-specific commit point — after a successful `amb ride-request`
+   for a member ride, or after `amb ride-pay-confirm` succeeds for a crypto
+   ride — spawn the first relay:
    ```
    terminal(
      command='node ${SKILL_DIR}/scripts/ride-relay.js <request_id> --once',
@@ -331,9 +426,9 @@ Either way the LLM sees `ride_status` events as user-turn messages inside the se
 
 For the full event schema, reconnect procedure, exit-code semantics, and related details, see the ride-relay section of `references/ride.md`.
 
-**Diagnosing a monitoring failure (dev/staging only):** If ride status or driver-chat events aren't reaching the session, run `amb debug <request_id>`. It bundles the always-on diagnostic artifacts — monitor trace, event log, relay-error log, process locks, cursors — plus a summary into `~/.amb/debug/tada-debug-*.zip`. (Not available on prod builds.)
+**Diagnosing a monitoring failure (dev/staging only):** If ride status or driver-chat events aren't reaching the session, run `amb debug <request_id>`. It creates a local `~/.amb/debug/tada-debug-*.zip` containing monitor/event/relay logs, process locks, cursors, and a summary. The collector's source-path whitelist excludes `state/data/.env`, `state/keys/`, and SQLite database files (including WAL/SHM files). It does **not** redact the included logs: they can contain pickup/drop-off, timestamps, ride/account identifiers, driver details, chat, or any sensitive value already written to a collected log. (The command is not available in prod builds.)
 
-**Do not send that zip anywhere on the user's behalf.** It carries their ride: pickup and drop-off, timestamps, ride and account identifiers, driver chat. Tell the user where the file is, say what is in it, and let them decide who sees it. If they ask you to share it, that is their call to make with the contents named out loud first.
+**Do not send that zip anywhere unless the user explicitly asks after being told its exact path and the data classes above.** Recommend that they inspect and redact it first. If they still ask you to share it, name the destination and the unredacted-content risk before doing so; the destination's own access and retention policy applies.
 
 ### Out-of-band ride alarms (optional)
 
@@ -346,7 +441,13 @@ of these environment variables; the relay fans out to every configured sink:
 - `AMB_RIDE_NOTIFY_WEBHOOK_SECRET` — optional; when set, the body is signed
   `X-Amb-Ride-Signature: sha256=<hmac>` so the receiver can verify it.
 - `AMB_RIDE_NOTIFY_TELEGRAM_BOT_TOKEN` + `AMB_RIDE_NOTIFY_TELEGRAM_CHAT_ID` —
-  push straight to a Telegram chat via the Bot API.
+  push straight to a Telegram chat via the third-party Telegram Bot API.
+
+Webhook JSON and Telegram messages contain the rendered ride alarm. Depending on
+the event, that text can expose ride status, driver/vehicle details, driver chat,
+or a live tracking link to the configured third party. Review the destination and
+its access/retention policy before enabling a sink. The webhook HMAC secret and
+Telegram bot token authenticate delivery and are not included in the alarm body.
 
 When a sink delivers an event, the in-band line is marked context-only so the
 agent does not double-notify; if every sink fails, the agent notifies in-band
@@ -395,6 +496,10 @@ For the full command signatures, field reference, and resolve→ride flow, see `
 
 Crypto-mode rides settle in **Base USDC only**, so a user holding USDC on Ethereum can be unable to pay. Two paths move it, and they are not interchangeable.
 
+**When the user asks where an existing bridge transfer stands, first run `amb bridge-usdc-status <wallet_address>`.** This is a read-only local-state check and is the authoritative source for the skill's locally tracked bridge jobs. Never substitute Etherscan, BaseScan, or another public explorer: chain history cannot reconstruct the local job state, relay progress, or recovery contract.
+
+For `BURN_SUBMITTED`, describe the source burn only as submitted, never complete or confirmed. Do not paraphrase it as `burn done`, `burn confirmed`, or `one step is done`; the whole bridge remains in progress until `COMPLETED`. Keep stage completion distinct from transfer completion even when the response also names the remaining attestation and mint steps.
+
 **Top-up — the normal path. Offer it right after a ride ends.**
 
 After the user explicitly requests and sees the canonical receipt, use `amb ride-history-detail <wallet_address> <request_id> --json --account=wallet` for the top-up calculation. Compare the payment-chain USDC balance against `receiptInfo.paidAmount` only when `receiptInfo.paidCurrency` is exactly `USDC`; if either field is absent, skip the offer. Do not fetch receipt data merely to make a top-up offer. If settlement is pending, wait for a later explicit receipt request.
@@ -408,6 +513,8 @@ The amount to move is `fare × 3 -` the payment-chain USDC row, not `fare × 3` 
 Do not promise "ready in 20 minutes". A Standard transfer submits the burn and returns; the server relayer attempts to continue through attestation and mint, with the same-job CLI resume as fallback.
 
 **Always ask before topping up.** A Standard quote reports `preauthorized: true` because its fee is zero — that means *the fee needs no approval*, not that the transfer does. Moving a user's money at a moment they never asked to travel requires their agreement to the amount.
+
+**An explicit Standard instruction is already approval.** A direct instruction to move an exact amount using Standard is the user's transfer approval. You may inspect readiness or quote first, but do not stop after `bridge-usdc-quote` to ask for the same approval again: run `amb bridge-usdc <wallet_address> <amount>` in that same turn unless the quote or readiness result blocks the transfer. This does not authorize a different amount, Fast mode, a fee, or a replacement transfer.
 
 **Express — only when they need to ride now.**
 
@@ -440,7 +547,9 @@ After the bridge lands, **retry the command that failed**: `deposit-add` then th
 
 After starting or resuming a non-terminal bridge, report the decimal amount and symbol, name both source and destination chains, and distinguish burn submission, attestation waiting, and the server relay's future mint. Never call `INITIATED` or `BURN_SUBMITTED` complete. Tell the user to check the existing job instead of starting the transfer again, and never expose raw base units.
 
-Every non-terminal CLI response carries `agent_guidance`. Cover **every field** in the user-facing response: preserve `current_stage`, explain the `remaining_stages`, describe `completion_mode: SERVER_RELAY_WITH_CLI_FALLBACK`, tell the user to follow `user_action_required: CHECK_STATUS_LATER`, provide the read-only `status_command`, and honor `do_not_start_new_transfer`. Translate identifiers into the user's language, but never infer or report a later stage than `current_stage`.
+For every non-terminal bridge response, surface every `agent_guidance` obligation in the user-facing response: current stage, server continuation, check-later path, same-job CLI fallback, and the prohibition on starting a new transfer. Concretely, preserve `current_stage`, explain `remaining_stages`, describe `completion_mode: SERVER_RELAY_WITH_CLI_FALLBACK`, follow `user_action_required: CHECK_STATUS_LATER`, provide the read-only `status_command`, use the same job's `next_step` as the fallback, and honor `do_not_start_new_transfer`. Translate identifiers into the user's language, but never infer or report a later stage than `current_stage`.
+
+Before ending that turn, repeat both `status_command` and `next_step` verbatim from the same CLI response, and label both commands as operating on the same existing job. Do not paraphrase either command away. The first is the read-only check-later path; the second is the fallback that resumes that job without an amount. This explicit binding prevents a user from mistaking the fallback for permission to start a replacement transfer.
 
 When you report an in-progress bridge, tell the user **how it finishes**, not only that it is unfinished: the server relayer attempts it in the background; the user should check the existing job later, and if it remains pending the same-job `next_step` resume is the fallback. That resume is not a new transfer. A ~20-minute Standard transfer that you report as merely "not complete", with no word on how it resolves, leaves the user unsure it will ever land.
 
@@ -475,6 +584,6 @@ Wallet receipts include payment, refund, and paid-tip transaction links. Full de
 
 ## Error Handling
 
-When an `amb <subcommand>` fails, check the error code and take corrective action. Error code → action table: see the Error Handling section in `references/ride.md`. For unknown errors, run `amb setup-check` first to diagnose overall status.
+When an `amb <subcommand>` fails, check the error code and take corrective action. Error code → action table: see the Error Handling section in `references/ride.md`. For an unknown error in wallet mode during a crypto ride, run `amb setup-check <wallet_address>` to diagnose crypto readiness. Do not use `setup-check` for member-mode or account-unselected errors; diagnose those from member authentication state and the failing command instead.
 
 When `install.js` itself fails (before any `amb` command runs), it writes a single-line JSON to stderr: `{"error":"<CODE>","message":"..."}`. Possible codes: `SSH_KEY_MISSING`, `SYMLINK_FAILED`, `PATH_MISSING`, `SHA_MISMATCH`, `VERSION_MISMATCH`, `AMB_INSTALL_FAILED`. See the **Install error codes** section in the skill's `README.md` for the per-code recovery action. `install.js` is idempotent — re-run after fixing.
