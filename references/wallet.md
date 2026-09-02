@@ -11,7 +11,9 @@ legacy SIWE path uses `personal_sign` (Privy-only):
 amb wallet-sign <address> personal_sign <siwe_file>
 ```
 
-Wallets come in two working kinds. During wallet onboarding, offer **Built-in Privy
+Wallet setup is optional. Enter it only when the user chooses crypto payment or explicitly
+asks for a wallet-dependent feature; member login and card-paid rides do not need a wallet.
+When a wallet is first needed, offer **Built-in Privy
 (recommended/default)** or **MetaMask**. `privy` is the built-in embedded wallet provisioned by
 `wallet-setup`. `metamask` is an external wallet driven through the MetaMask Agent Wallet CLI
 (`mm`), registered with `wallet-connect-metamask`; the skill never sees its keys and asks `mm`
@@ -24,6 +26,9 @@ the identical `amb wallet-connect-metamask` command again. The command resumes i
 mode-0600 state automatically and deletes that state after registration or a definite terminal
 result; pending or indeterminate results remain resumable. Never expose or manually
 use an mm polling ID. After registration, the Agent runs typed login in order: `amb siwe-request-typed <wallet_address> <chain_id>` → `amb wallet-sign <wallet_address> eth_signTypedData_v4 <typed_file>` → `amb typed-submit <typed_file> <signature>`.
+
+Use the literal wallet address returned by `amb wallet-status --json` directly in both
+`siwe-request-typed` and `wallet-sign`. Do not use a shell variable or command substitution for that address.
 
 For typed-sign approval recovery, follow the exact-command contract in
 [`wallet_sign`](#wallet_sign---sign-a-message) below; it applies to both login and payment.

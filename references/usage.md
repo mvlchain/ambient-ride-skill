@@ -30,12 +30,11 @@ TADA/Throo is operated by the TADA team — see [tada.global](https://tada.globa
 Always needed, regardless of how you pay:
 
 - **Node.js 22.22.0 or newer** on a host that supports skills (Claude Code, OpenClaw, …)
-- A wallet — the built-in **Privy** embedded wallet the skill provisions for you at onboarding (no wallet of your own is needed). Every user gets one; it does not by itself change how you pay.
 
 Then it depends on which payment mode you choose:
 
-- **TADA/Throo member (card payment)** — a TADA/Throo account with a registered payment card, signed in through the TADA/Throo app. **No crypto, collateral, gas token, or USDC is required on this path.**
-- **Crypto wallet (USDC payment)** — a small amount of **USDC** or **MVL token** to deposit as collateral, plus a small amount of the deposit chain's **native gas token** for the deposit transaction fee, and a separate small amount of **USDC** to pay ride fares afterwards (collateral and fares are different things — see below).
+- **TADA/Throo member (card payment)** — a TADA/Throo account with a registered payment card, signed in through the TADA/Throo app. **No wallet, crypto, collateral, gas token, or USDC is required on this path.**
+- **Crypto wallet (USDC payment)** — a built-in **Privy** wallet or your **MetaMask** wallet, a small amount of **USDC** or **MVL token** to deposit as collateral, a small amount of the deposit chain's **native gas token** for the deposit transaction fee, and separate USDC for ride fares (collateral and fares are different things — see below).
 
 You do not need any other crypto knowledge to use the skill — the agent walks you through every step.
 
@@ -50,7 +49,7 @@ This skill lets an agent **spend your money**. It can request a ride that charge
 Two more things it does on your machine:
 
 - It keeps **saved places** in a local database so repeat rides are quick, and caches ride state there too. That is a record of where you go. Deleting the state directory removes the local copy (see the uninstall answer in the FAQ), but it is not the only copy: your **ride history lives on TADA/Throo's servers** the same as it would if you booked from their app, and **saving a place sends that place to them too**. What data goes where is spelled out in the FAQ.
-- It stores your **wallet key material** under the state directory. Treat that directory the way you would treat a password manager's data.
+- If you choose built-in Privy, it stores encrypted **wallet key material** under the state directory. Treat that directory the way you would treat a password manager's data. MetaMask keeps its keys outside the skill; the member path creates no wallet keys.
 
 ---
 
@@ -58,34 +57,33 @@ Two more things it does on your machine:
 
 This section explains *what happens at each step* and *why the order matters*. For the actual commands, see the per-feature references.
 
-### 1. Provision your wallet (everyone)
-Every agent gets a built-in Privy embedded wallet, provisioned once at onboarding — see *How wallets work in this skill* below for what that actually means. The wallet is created for both payment modes and does not, on its own, change ride pricing or how you pay.
-
-### 2. Choose how you'll pay
-After the wallet is ready, you settle on a payment mode. This choice drives ride **pricing** and which backend serves you — member and crypto are priced differently — so it is made explicitly:
+### 1. Choose how you'll pay
+First choose a payment mode. This choice drives ride **pricing** and which backend serves you — member and crypto are priced differently — so it is made explicitly before any wallet is created or connected:
 
 - **TADA/Throo member (card)** — pay with a card registered in the TADA/Throo app.
 - **Crypto wallet (USDC)** — pay from your wallet in USDC.
 
-Searching for a ride, requesting it, and chatting with the driver are identical on both paths; only sign-in and payment differ.
+You can also decide later; that leaves the account unconfigured until you choose a path before booking. Searching for a ride, requesting it, and chatting with the driver are similar on both paths; sign-in, readiness checks, command arguments, and payment differ.
 
 ### Member path — card payment
 
-**M1. Sign in with the TADA/Throo app.** There is no password: the agent starts a device-flow login, shows an approval link (and a QR code), you approve in the TADA/Throo app, and the app displays a 4-digit code you hand back to the agent. **No SIWE, no collateral, and no USDC on this path** — your account and payment card already live in the app.
+**M1. Sign in with the TADA/Throo app.** There is no password: the agent starts a device-flow login, shows an approval link (and a QR code), you approve in the TADA/Throo app, and the app displays a 4-digit code you hand back to the agent. **No wallet, SIWE, collateral, or USDC on this path** — your account and payment card already live in the app.
 
 **M2. Search, request, ride.** Tell the agent where you're going; it resolves the places, shows available cars and fares, and books the one you pick. When the ride completes, the fare is charged to your registered card.
 
 ### Crypto path — wallet payment
 
-**C1. Sign in with your wallet (SIWE).** The first time the agent talks to TADA's backend it proves you control the wallet with a **Sign-In With Ethereum (SIWE)** message — a short text the wallet signs once, which the backend exchanges for a session. No password and no email/SMS code; the wallet itself is your identity.
+**C1. Choose and set up a wallet.** Pick the built-in **Privy** wallet (recommended) or connect **MetaMask**. The agent waits for your provider choice and any required approval; it never provisions one merely because the skill was installed.
 
-**C2. Verify your phone number.** Accounts on this path are tied to a verified phone number, mostly so drivers can contact riders if needed. The agent triggers an SMS OTP and asks you to type the code back. This only happens once per phone number.
+**C2. Sign in with your wallet (SIWE).** The first time the agent talks to TADA's backend it proves you control the wallet with a **Sign-In With Ethereum (SIWE)** message — a short text the wallet signs once, which the backend exchanges for a session. No password and no email/SMS code; the wallet itself is your identity.
 
-**C3. Deposit collateral into TADA's deposit contract.** Before you are eligible to request rides on this path, you stake collateral — **USDC or MVL token** — into TADA's on-chain deposit contract. This is a one-time on-chain transfer. **It is *not* a prepaid balance that ride fares are deducted from.** Your collateral stays on-chain and can be withdrawn later when you no longer need access. This step requires the collateral itself plus a small amount of the chain's native gas token to pay the deposit transaction fee. Note: whichever token you deposit, your collateral is credited and returned as the **MVL token** — a USDC deposit is converted to an MVL credit, and a withdrawal returns MVL, not USDC.
+**C3. Verify your phone number.** Accounts on this path are tied to a verified phone number, mostly so drivers can contact riders if needed. The agent triggers an SMS OTP and asks you to type the code back. This only happens once per phone number.
 
-**C4. Search, request, ride.** Same as the member path — the agent resolves both places into TADA "places" via autocomplete + an interactive map session, then queries available cars: how long the wait is, which classes are available, and what each one costs, and books the one you pick. (Origin and destination must currently be inside a city this skill supports — NYC or SIN.)
+**C4. Deposit collateral into TADA's deposit contract.** Before you are eligible to request rides on this path, you stake collateral — **USDC or MVL token** — into TADA's on-chain deposit contract. This is a one-time on-chain transfer. **It is *not* a prepaid balance that ride fares are deducted from.** Your collateral stays on-chain and can be withdrawn later when you no longer need access. This step requires the collateral itself plus a small amount of the chain's native gas token to pay the deposit transaction fee. Note: whichever token you deposit, your collateral is credited and returned as the **MVL token** — a USDC deposit is converted to an MVL credit, and a withdrawal returns MVL, not USDC.
 
-**C5. Pay for the ride with x402 (USDC).** Ride payment is **completely separate from collateral**. After the ride completes, the agent settles the fare using **x402**, an HTTP-native payment protocol where the server tells the client exactly how much to pay and the client pays inline as part of the same request. The fare is paid out of your wallet's USDC balance — it does **not** draw from the deposit contract. Your collateral stays put.
+**C5. Search, request, ride.** The agent resolves both places into TADA "places" via autocomplete + an interactive map session, then queries available cars: how long the wait is, which classes are available, and what each one costs, and books the one you pick. (Origin and destination must currently be inside a city this skill supports — NYC or SIN.)
+
+**C6. Pay for the ride with x402 (USDC).** Ride payment is **completely separate from collateral**. After the ride completes, the agent settles the fare using **x402**, an HTTP-native payment protocol where the server tells the client exactly how much to pay and the client pays inline as part of the same request. The fare is paid out of your wallet's USDC balance — it does **not** draw from the deposit contract. Your collateral stays put.
 
 ### After the ride (both paths)
 While the ride is active, you can chat with the driver in real time. After it ends you can send a tip, charged the same way your fare was — to your card as a member, or in USDC on the crypto path. Past-ride review is currently in development.
@@ -125,7 +123,7 @@ Through the repository this skill ships from. Issues filed there are seen by the
 ### Getting started
 
 **I'm new — what's the first thing I should do?**
-Tell the agent something like *"install tada-ride"*, then *"I want to book a ride"*. The agent runs the install script, provisions your wallet, and asks how you want to pay. If you pick the **TADA/Throo member** path it walks you through app sign-in and you're ready to ride; if you pick **crypto**, it walks you through SIWE login, phone verification, and the initial collateral deposit. After that, you can ask for a ride directly.
+Tell the agent something like *"install tada-ride"*, then *"I want to book a ride"*. The agent runs the install script and first asks how you want to pay. If you pick the **TADA/Throo member** path it signs you in without creating a wallet; if you pick **crypto**, it asks whether to use Privy or MetaMask before walking through SIWE login, phone verification, and the initial collateral deposit. After that, you can ask for a ride directly.
 
 **Do I really need crypto to use this?**
 Only on the crypto-wallet path. If you sign in as a **TADA/Throo member**, you pay with a card registered in the app and need **no** USDC, collateral, or gas token. On the **crypto** path, both the deposit step (eligibility) and ride payment are on-chain, so you need:
@@ -136,7 +134,7 @@ Only on the crypto-wallet path. If you sign in as a **TADA/Throo member**, you p
 Either way, you do not need any crypto knowledge beyond approving the steps the agent walks you through.
 
 **Can I use my own wallet instead of the built-in one?**
-Not at the moment — the skill creates and uses its own Privy embedded wallet. Bringing your own wallet address is not currently offered.
+Yes. On the crypto path, choose **MetaMask** to connect an external wallet controlled through the MetaMask Agent Wallet CLI; the skill never receives its private key. Or choose the built-in Privy wallet. TADA/Throo members need neither.
 
 ### How it works — concepts
 
@@ -173,7 +171,8 @@ A passphrase the install script generates and stores in your local agent config.
 What the skill contacts, and why:
 
 - **TADA/Throo servers** — place search, ride search/request/status/cancel, payment, chat messages, tipping, member sign-in (phone OTP), and telemetry relay. Pickup and drop-off coordinates go here as part of any search or ride. **Your ride history lives on these servers**, not only on this machine — `ride-history` fetches it back from them.
-- **Privy** — your wallet lives there. Provisioning it, and every signature it produces, goes through Privy's API. This machine holds an encrypted key that lets it ask Privy to sign; Privy holds the other half.
+- **Privy** — only when you choose the built-in wallet. Provisioning it, and every signature it produces, goes through Privy's API. This machine holds an encrypted key that lets it ask Privy to sign; Privy holds the other half.
+- **MetaMask Agent Wallet CLI** — only when you choose MetaMask. It controls the external wallet and handles approval/signing outside this skill; the skill does not receive its key.
 - **Google** — only when you hand the agent a Google Maps link to save as a place. Resolving that link into a real place means asking Google about it.
   Saving a place also sends it to TADA/Throo: `place-save` posts the name, coordinates, and Google identifier to their gateway, signed in as you. So if you save your home, your home address is associated with your account there — the saved-place *list* is local, but the places themselves are not a secret you keep from TADA/Throo.
 - **Public blockchain RPC endpoints** (`eth.drpc.org`, `mainnet.base.org`) — crypto path only, for reading balances and broadcasting transactions. They see your wallet address and the transactions you send, both of which are public on-chain regardless.
