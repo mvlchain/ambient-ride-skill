@@ -25,7 +25,7 @@ This is what "agents doing things in the physical world" looks like when it's re
 
 Book TADA/Throo rides through your AI agent — in Claude Code or OpenClaw (Telegram).
 
-All runtime state (wallet keys, encrypted passphrase, ride DB) lives in `~/.amb/state/{data,keys}/` — independent of the skill's install directory since Phase 1. Installation preserves OpenClaw skill entries, Claude settings, and unrelated environment keys.
+All runtime state (encrypted passphrase, ride DB, and wallet keys only if you choose built-in Privy) lives in `~/.amb/state/{data,keys}/` — independent of the skill's install directory since Phase 1. Installation preserves OpenClaw skill entries, Claude settings, and unrelated environment keys.
 
 ## Install
 
@@ -66,17 +66,17 @@ claude plugin install ride@ambient-ride --scope project
 openclaw skills install @ambprotocol/ride
 ```
 
-ClawHub classifies this release as `review-required`, so the command above stops
-with a warning instead of installing. Install with the acknowledgement:
+ClawHub publishes a security audit for each released version. Treat **Pass**,
+**Review**, and **Blocked** as distinct outcomes: Review asks the operator to
+inspect the findings and is not the same as Pass or a malware verdict; Blocked
+must not be bypassed. Installation success alone does not prove that the exact
+version passed its audit. Read the public
+[security audit](https://clawhub.ai/ambprotocol/skills/ride/security-audit)
+before use, because this skill can book physical rides and spend money.
 
-```bash
-openclaw skills install @ambprotocol/ride --acknowledge-clawhub-risk
-```
-
-In a terminal you can type the package name at the prompt instead of passing the
-flag. This is not a malware verdict — OpenClaw refuses those outright and never
-downloads them. The [security audit](https://clawhub.ai/ambprotocol/skills/ride/security-audit)
-is public; it is worth reading, because this skill can spend your money.
+If installation stops on a version-specific policy check, follow the recovery
+instruction printed by the installed OpenClaw CLI instead of copying a flag
+from documentation for another release.
 
 Restart the gateway:
 ```bash
@@ -128,10 +128,30 @@ L1 bootstrap (skill side): fetches the `amb` CLI binary and puts it on `$PATH`. 
 
 **git builds (dev/staging):**
 
-1. Clones `mvlchain/ambient-ride-cli` (dev/staging branch) into `~/.amb/cli/` — or runs `git fetch + reset --hard` if it already exists.
-2. Runs `npm install --omit=dev` in that directory — the CLI's native dependencies (`better-sqlite3` and friends) live outside the bundled binary and must be resolved separately. (The skill bundle itself has no dependencies — its scripts import nothing outside Node's builtins, so nothing is installed inside the skill directory.)
-3. `chmod +x ~/.amb/cli/amb` and creates a symlink at `~/.local/bin/amb` (overwriting any existing one).
-4. Verifies `~/.local/bin` is on `$PATH` (fatal exit with guidance if not).
+1. Verifies `~/.local/bin` is on `$PATH` before any bootstrap or migration
+   mutation (fatal exit with guidance if not).
+2. Creates a transaction-owned sibling staging directory named
+   `~/.amb-cli-bootstrap-*` and clones `mvlchain/ambient-ride-cli`
+   (dev/staging branch) into its `cli/` child. The live `~/.amb/cli` is not
+   updated in place.
+3. Runs `npm install --omit=dev` in the staged clone — the CLI's native
+   dependencies (`better-sqlite3` and friends) live outside the bundled binary
+   and must be resolved separately. (The skill bundle itself has no dependencies
+   — its scripts import nothing outside Node's builtins, so nothing is installed
+   inside the skill directory.)
+4. Verifies the staged binary. On a SHA mismatch, its one automatic retry runs
+   `git fetch + reset --hard` only inside that staged clone.
+5. After the staged binary has successfully run `amb install`, temporarily moves
+   any existing `~/.amb/cli` and `~/.local/bin/amb` symlink to transaction-owned
+   `.replaced-*` paths, promotes the staged CLI into `~/.amb/cli`, and creates the
+   managed symlink.
+6. Verifies that `amb` on `$PATH` resolves to the promoted managed binary.
+7. Commits by removing the private transaction marker
+   and recursively cleaning only the validated bootstrap and owned replacement
+   paths. An interrupted transaction retains a private marker; a later installer
+   run validates it and attempts to resume forward when the recorded state can
+   be reconciled safely. Unreconcilable, invalid, or mismatched recovery state is
+   preserved and fails closed instead of being used.
 
 **npm builds (prod):**
 
@@ -140,7 +160,7 @@ L1 bootstrap (skill side): fetches the `amb` CLI binary and puts it on `$PATH`. 
 
 Then, regardless of mode:
 
-- Calls `amb --version` and checks the baked expected version matches (git: `git_sha`; npm: semver against the baked minimum CLI version) — on mismatch, retries the install step (`git fetch + reset --hard` or `npm i -g`) once automatically.
+- Calls `amb --version` and checks the baked expected version matches (git: `git_sha`; npm: semver against the baked minimum CLI version) — on mismatch, retries the staged git checkout (`git fetch + reset --hard` inside the bootstrap clone) or `npm i -g` once automatically.
 
 L2 delegation (`amb install`):
 
@@ -156,7 +176,7 @@ On success, stdout emits a single-line JSON: `{"status":"installed" | "already_i
 ## Requirements
 
 - Node.js 22.22.0 or newer (`>=22.22.0`); contributors should use the pinned 22.22.0 runtime via `.node-version` or `nvm install 22.22.0 && nvm use 22.22.0`
-- `npm` (ships with Node — git builds invoke `npm install --omit=dev` inside `~/.amb/cli/`; npm builds invoke `npm i -g @ambprotocol/ride-cli@latest`)
+- `npm` (ships with Node — git builds invoke `npm install --omit=dev` inside the staged `~/.amb-cli-bootstrap-*/cli/`; npm builds invoke `npm i -g @ambprotocol/ride-cli@latest`)
 - `git` — needed to clone this skill bundle for a manual/project-scoped install, and by Claude Code to fetch the plugin marketplace repository; git builds additionally use it to clone `mvlchain/ambient-ride-cli` (npm builds don't)
 - The `amb` binary must end up on `$PATH`:
   - **git builds**: `~/.local/bin` must be on `$PATH` — usually automatic on modern Linux/macOS; otherwise add `export PATH="$HOME/.local/bin:$PATH"` to your shell profile and open a new shell
@@ -202,14 +222,16 @@ to load. If you installed with `--scope project` (or `local`), pass the same sco
 already-installed skill (that needs `--force`).
 
 ```bash
-openclaw skills update @ambprotocol/ride --acknowledge-clawhub-risk
+openclaw skills update @ambprotocol/ride
 ```
 
-`skills update` runs the same verdict check as `skills install`, so it needs the
-same acknowledgement — in a terminal you can answer the prompt instead.
+`skills update` runs the same version-specific verdict check as `skills install`.
+If the installed OpenClaw CLI requires an acknowledgement for a particular
+release, follow the recovery instruction it prints instead of copying a stale
+flag from this README.
 
 ```bash
-openclaw skills update --all --acknowledge-clawhub-risk
+openclaw skills update --all
 ```
 
 updates every tracked ClawHub skill. Add `--global` if you installed into the
@@ -220,10 +242,10 @@ shared managed skills directory.
 ```bash
 cd <install_dir>
 git pull
-node scripts/install.js   # idempotent — re-syncs ~/.amb/cli + preserves passphrase + DB + keys
+node scripts/install.js   # idempotent — stages/promotes CLI + preserves passphrase + DB + keys
 ```
 
-`install.js` is safe to re-run; it never regenerates an existing passphrase, and `~/.amb/cli` is brought up to the latest baked sha automatically via `git fetch + reset --hard`.
+`install.js` is safe to re-run and never regenerates an existing passphrase. Git builds verify a fresh staged clone and promote it into `~/.amb/cli`; only a staged SHA-mismatch retry uses `git fetch + reset --hard` inside the transaction-owned bootstrap clone.
 
 ## Account modes (TADA/Throo member vs crypto wallet)
 
@@ -235,17 +257,17 @@ Check the current mode at any time:
 amb whoami     # JSON: { "mode": "tada" | "wallet" | null, "member_available": <bool>, ... }
 ```
 
-- `mode: "tada"` — signed in to a **TADA/Throo member account**; rides are paid with your registered card.
+- `mode: "tada"` — signed in to a **TADA/Throo member account**; rides are paid with your registered card and no wallet is required.
 - `mode: "wallet"` — **crypto wallet** mode; rides are paid from the wallet.
 - `mode: null` — not onboarded yet.
 
 `member_available` reports whether this build ships TADA/Throo member support. When it is `false`, only crypto wallet mode is offered (member commands return `status: "unavailable"`).
 
-`amb install` is non-interactive and does **not** pick a mode — onboarding (member vs wallet) happens on first use, driven by the agent.
+`amb install` is non-interactive and does **not** pick a mode or create a wallet. On first use the agent asks whether to use TADA/Throo member card payment, crypto wallet payment, or decide later. Member sign-in goes directly to `amb login --no-wait`; the crypto path asks you to choose Privy or MetaMask before creating or connecting anything.
 
 ### Sign in to a TADA/Throo member account
 
-Member sign-in uses the TADA/Throo app (device-flow); there is no CLI password:
+Member sign-in uses the TADA/Throo app (device-flow); there is no CLI password and no wallet is created or required:
 
 ```bash
 amb login      # interactive: prints an approval link, then prompts for the 4-digit code

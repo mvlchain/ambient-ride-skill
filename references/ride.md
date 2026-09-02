@@ -4,7 +4,34 @@
 
 ## Place Search
 
-### place_search - Autocomplete suggestions
+`place-search` and `place-detail` have mode-specific signatures. Run
+`amb whoami --json` before the first place command and use exactly one branch:
+
+| Mode | Search | Detail |
+|---|---|---|
+| `wallet` | `amb place-search <wallet_address> <city> <query> [latitude longitude] --json` | `amb place-detail <wallet_address> <city> <place_id> --json` |
+| `tada` | `amb place-search <query> <region> [originLat originLng] [--city CODE] [--session-token UUID] [--lang TAG] --json` | `amb place-detail <place_id> <region> [city] [--lang TAG] --json` |
+| `null` | Stop and complete onboarding before resolving a ride place. | — |
+
+Do not infer the mode from a response shape. Wallet responses expose coordinates
+under `locationPoint`; member responses expose them under `lat_lng`. Extract the
+latitude/longitude pair, then project it differently for each command:
+
+- `ride-search` takes origin and destination coordinates as positional arguments:
+  - member: `amb ride-search <oLat> <oLng> <dLat> <dLng> [card_uuid] --json`
+  - wallet: `amb ride-search <wallet_address> <region> <oLat> <oLng> <dLat> <dLng> --json`
+- `ride-request` takes one JSON argument. Put each pair inside the corresponding
+  `locations[]` object as `latitude` and `longitude`; they are not top-level
+  request fields in either mode:
+
+  ```json
+  {"locations":[{"latitude":1.3001,"longitude":103.8001},{"latitude":1.3202,"longitude":103.8202}]}
+  ```
+
+Add the other mode-specific `ride-request` fields described below; this example
+shows only the coordinate projection.
+
+### Wallet place search — autocomplete suggestions
 
 Before running `place_search` to resolve a ride origin or destination, you may ask the user for their current location (latitude/longitude) to improve search accuracy. **Say what it is for and that it is optional** — something like "if you tell me roughly where you are I can rank the results better, but I can search without it". Precise coordinates are sensitive, and asking for them flatly reads as a requirement. They are sent to TADA/Throo as the search's bias point. If the user does not know, does not want to say, or does not answer, proceed without it — the search falls back to the city center.
 
@@ -239,9 +266,9 @@ amb place-remove <wallet_address> <id_or_label>
 
 If the argument is an integer it's treated as the row `id`; otherwise as a `label`. Returns `{ removed: 1, id, label }` on success or `{ removed: 0, error: "NOT_FOUND" }` (still exit 0).
 
-### Agent flow — Step 0 before any ride
+### Crypto saved-place shortcut (`mode: "wallet"` only)
 
-Before running this flow, apply the **"Acknowledge before a long booking turn"** guardrail in `SKILL.md`: unless this turn's response is a question (not signed in / no destination / already-known-ambiguous), send a short acknowledgement first, then proceed. See that guardrail for the OpenClaw `message send` mechanics.
+Run `amb whoami` before considering this shortcut. It applies only to `mode: "wallet"`, because saved-place commands require a registered wallet address. For `mode: "tada"`, skip `place-list` and resolve named locations with the member flow's wallet-free `place-search` / `place-detail` commands below. Before either flow, apply the **"Acknowledge before a long booking turn"** guardrail in `SKILL.md`: unless this turn's response is a question (not signed in / no destination / already-known-ambiguous), send a short acknowledgement first, then proceed. See that guardrail for the OpenClaw `message send` mechanics.
 
 Places stored locally include both favorites (explicit, with labels) and history (auto-tracked from every successful ride-request, no label). `amb place-list --match QUERY` returns both, but `is_favorite=1` rows are sorted ahead of history, then by `hit_count` and `last_used_at`. When mixed results appear:
 - If an `is_favorite=1` row matches, use it directly.
@@ -249,7 +276,7 @@ Places stored locally include both favorites (explicit, with labels) and history
 
 Promote a history row to favorite with `amb place-favorite <wallet> <id_or_dedup_key> --label LABEL`. Demote with `amb place-unfavorite <wallet> <id_or_label>` (preserves hit_count). Auto-history fields on each row: `is_favorite`, `hit_count`, `last_used_at`. `hit_count` counts requests, not completions — cancelled rides still count.
 
-When the user names an origin or destination, **always** start with:
+In `mode: "wallet"`, when the user names an origin or destination, start with:
 
 1. Generate 2–5 candidate phrasings (original / English / alias / typo correction).
 2. `amb place-list <wallet> --match "<c1>" --match "<c2>" …`
@@ -273,7 +300,7 @@ If `matches` is empty (or the matched tier feels ambiguous and the candidates ar
 ## Ride
 
 > **Two modes — run `amb whoami` first and read `mode`.** The ride commands have different argument forms per mode:
-> - **`mode: "tada"` (TADA/Throo member)** — card-paid. Use the **Member mode** flow immediately below. **Do NOT call `ride-pay-prepare` / `ride-pay-confirm`** — they are wallet-only and return `MODE_MISMATCH` for members.
+> - **`mode: "tada"` (TADA/Throo member)** — card-paid and wallet-free. Use the **Member mode** flow immediately below. **Do NOT call `setup-check`, `wallet-*`, collateral, SIWE, `ride-pay-prepare`, or `ride-pay-confirm`** — those belong to the crypto path, and wallet-only commands return `MODE_MISMATCH` for members.
 > - **`mode: "wallet"` (crypto)** — collateral/USDC-paid. Use the `<wallet_address>`-prefixed forms and the payment flow (`ride-pay-prepare → wallet-sign → ride-pay-confirm`) documented in the subsections after this one.
 
 ### Member mode (`mode: "tada"`) — card-paid ride flow
@@ -705,13 +732,16 @@ Pass the `wallet_signature` from step 2. Returns `{ success, tx_hash }`.
 
 ## ride-relay (event streaming)
 
-Streams ride status and driver chat events to the agent after payment is confirmed.
+Streams ride status and driver chat events from the mode-specific commit point:
 
-**⚠️ Only start AFTER payment is confirmed** (`amb ride-pay-confirm` returns `success: true`). Do not start while status is `WAITPAY`.
+- **Member (`mode: "tada"`)** — start immediately after `amb ride-request`
+  succeeds. Member rides have no separate `ride-pay-*` step.
+- **Crypto (`mode: "wallet"`)** — start only after `amb ride-pay-confirm`
+  returns `success: true`; never start while status is `WAITPAY`.
 
 ### How to start
 
-Immediately after `amb ride-pay-confirm` succeeds, start ride-relay using the platform's background primitive:
+At the applicable commit point above, start ride-relay using the platform's background primitive:
 
 ```bash
 node ${SKILL_DIR}/scripts/ride-relay.js <request_id> [--agent <agent-id>] [--session-key <session-key>] [--session-id <sid>] [--once]
@@ -824,8 +854,8 @@ Used by the reconnect procedure to decide whether to restart ride-relay after an
 | `EXPIRED_RECALLABLE` | Inform user that no driver was found but the ride can be re-requested with the same search. Offer to re-request immediately. |
 | `EXPIRED_BEFORE_PAY` | Inform user the payment window expired. Offer to search for a new ride. |
 | `NOT_MATCHED` | Inform user that no driver was matched. Offer to search for a new ride. |
-| `ERROR_PAYMENT` | Inform user of a payment processing error. Run `amb wallet-balance` and `amb deposit-status` to diagnose. |
-| `ERROR` | Inform user of a system error. Run `amb setup-check` to diagnose. |
+| `ERROR_PAYMENT` | Inform user of a payment processing error. In wallet mode, run `amb wallet-balance` and `amb deposit-status`; in member mode, diagnose the card/member error without wallet commands. |
+| `ERROR` | Inform user of a system error. In wallet mode during a crypto ride, run `amb setup-check <wallet_address>`; in member mode, inspect member authentication and the failing command instead. |
 
 **Do not tell the user to wait** — report each event as it arrives. **Never say "let me know if you'd like to check the status" — do not hand the trigger to the user.**
 
@@ -865,7 +895,7 @@ conversion context and payment, refund, and paid-tip transaction links.
 Canceled or unsettled rides do not produce a canonical receipt;
 `RECEIPT_NOT_READY` asks the caller to retry later.
 
-## Full Ride Booking Flow
+## Full Crypto Ride Booking Flow
 
 0. Initial setup (first time only)
 ```bash
@@ -964,4 +994,4 @@ When a command fails, take the following action based on the error code:
 | `INSUFFICIENT_BALANCE` | Run `amb wallet-balance`. If the bridge source chain's USDC row has funds, the wallet can be topped up from Ethereum — see SKILL.md → "USDC bridge". If that chain has no rows at all, this build has no bridge and that is not the problem. Once the bridge lands, retry the payment or tip that failed. |
 | `RIDE_REQUEST_FAILED` | Run both `amb deposit-status` and `amb wallet-balance` to identify the cause |
 
-For unknown errors, run `amb setup-check` first to check overall status.
+For unknown errors in wallet mode during a crypto ride, run `amb setup-check <wallet_address>` to check crypto readiness. Never use it as general recovery for member mode or `mode: null`; inspect member authentication and the failing command instead.

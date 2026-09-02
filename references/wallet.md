@@ -11,7 +11,9 @@ legacy SIWE path uses `personal_sign` (Privy-only):
 amb wallet-sign <address> personal_sign <siwe_file>
 ```
 
-Wallets come in two working kinds. During wallet onboarding, offer **Built-in Privy
+Wallet setup is optional. Enter it only when the user chooses crypto payment or explicitly
+asks for a wallet-dependent feature; member login and card-paid rides do not need a wallet.
+When a wallet is first needed, offer **Built-in Privy
 (recommended/default)** or **MetaMask**. `privy` is the built-in embedded wallet provisioned by
 `wallet-setup`. `metamask` is an external wallet driven through the MetaMask Agent Wallet CLI
 (`mm`), registered with `wallet-connect-metamask`; the skill never sees its keys and asks `mm`
