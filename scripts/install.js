@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 
 // <define:__AMB_INSTALL_BUILD_CONFIG__>
-var define_AMB_INSTALL_BUILD_CONFIG_default = { mode: "npm", repoBranch: "main", expectedCliSha: "f8c05512", minimumCliVersion: "1.3.0" };
+var define_AMB_INSTALL_BUILD_CONFIG_default = { mode: "npm", repoBranch: "main", expectedCliSha: "84b672c1", minimumCliVersion: "1.3.0" };
 
 // src/scripts/install.ts
 import os2 from "os";
-import path2 from "path";
+import path3 from "path";
 import fs2 from "fs";
 
 // src/lib/install/cli-bootstrap.ts
@@ -486,12 +486,40 @@ function verifyCli(opts) {
   return check(opts, v2.version, v2.git_sha);
 }
 
+// src/lib/install/managed-amb-command.ts
+import { spawnSync } from "child_process";
+
+// src/lib/core/fixed-executable-env.ts
+import { accessSync, constants, statSync } from "fs";
+import path2 from "path";
+function fixedExecutableEnv(name, selected, env = process.env) {
+  const errorCode = name === "amb" ? "AMB_EXECUTABLE_INVALID" : "RELAY_EXECUTABLE_INVALID";
+  const executable = path2.resolve(selected);
+  const directory = path2.dirname(executable);
+  if (path2.basename(executable) !== name || directory.includes(path2.delimiter) || executable.includes("\0")) {
+    throw new Error(`${errorCode}: expected an executable named ${name}`);
+  }
+  if (!statSync(executable).isFile()) throw new Error(`${errorCode}: not a regular file`);
+  accessSync(executable, constants.X_OK);
+  return { ...env, PATH: [directory, ...env.PATH ? [env.PATH] : []].join(path2.delimiter) };
+}
+
+// src/lib/install/managed-amb-command.ts
+function managedAmbEnv(selected) {
+  return selected === "amb" ? { ...process.env } : fixedExecutableEnv("amb", selected);
+}
+function runManagedAmbVersion(selected) {
+  return spawnSync("amb", ["--version", "--json"], { shell: false, encoding: "utf8", env: managedAmbEnv(selected) });
+}
+function runManagedAmbInstall(selected) {
+  return spawnSync("amb", ["install"], { shell: false, encoding: "utf8", env: managedAmbEnv(selected) });
+}
+
 // src/lib/install/cli-install-delegate.ts
-import { spawnSync as nodeSpawnSync } from "child_process";
 function delegateAmbInstall(opts = {}) {
   const ambCmd = opts.ambCmd ?? "amb";
   const deps = opts.deps ?? {
-    spawnSync: () => nodeSpawnSync(ambCmd, ["install"], { encoding: "utf8" })
+    spawnSync: () => runManagedAmbInstall(ambCmd)
   };
   const result = deps.spawnSync();
   const code = result.status;
@@ -531,7 +559,7 @@ function unsupportedNodeVersionMessage(version) {
 }
 
 // src/scripts/install.ts
-import { execFileSync as nodeExecFileSync2, spawnSync as nodeSpawnSync2 } from "child_process";
+import { execFileSync as nodeExecFileSync2, spawnSync as nodeSpawnSync } from "child_process";
 
 // src/lib/build/amb-install-build-config.ts
 var testConfig;
@@ -587,7 +615,7 @@ function defaultDeps() {
       });
     },
     resolveAmb: () => {
-      const r = nodeSpawnSync2("which", ["amb"], { encoding: "utf8" });
+      const r = nodeSpawnSync("which", ["amb"], { encoding: "utf8" });
       if (r.status === 0 && r.stdout.trim() !== "") return r.stdout.trim();
       return null;
     },
@@ -595,7 +623,7 @@ function defaultDeps() {
       try {
         const prefix = nodeExecFileSync2("npm", ["config", "get", "prefix"], { encoding: "utf8" }).trim();
         if (prefix === "") return null;
-        return path2.join(prefix, "bin");
+        return path3.join(prefix, "bin");
       } catch {
         return null;
       }
@@ -610,7 +638,7 @@ function defaultDeps() {
   };
 }
 function expandHome(p) {
-  if (p.startsWith("~/")) return path2.join(process.env["HOME"] ?? os2.homedir(), p.slice(2));
+  if (p.startsWith("~/")) return path3.join(process.env["HOME"] ?? os2.homedir(), p.slice(2));
   return p;
 }
 function reportGitFailure(e) {
@@ -637,8 +665,8 @@ async function runInstall(depsOverride) {
   const minVersion = install.minimumCliVersion;
   const cliDir = expandHome("~/.amb/cli");
   const binDir = expandHome(SYMLINK_DIR);
-  const linkPath = path2.join(binDir, SYMLINK_TARGET);
-  let managedAmb = path2.join(cliDir, "amb");
+  const linkPath = path3.join(binDir, SYMLINK_TARGET);
+  let managedAmb = path3.join(cliDir, "amb");
   let stagedCliDir = null;
   let promotion = null;
   const ambientRoot = expandHome("~/.amb");
@@ -663,7 +691,7 @@ async function runInstall(depsOverride) {
       promotion = deps.loadCliPromotion({ ambientRoot, cliDir, linkPath });
       if (promotion) {
         stagedCliDir = promotion.stagedCliDir;
-        managedAmb = fs2.existsSync(path2.join(stagedCliDir, "amb")) ? path2.join(stagedCliDir, "amb") : path2.join(cliDir, "amb");
+        managedAmb = fs2.existsSync(path3.join(stagedCliDir, "amb")) ? path3.join(stagedCliDir, "amb") : path3.join(cliDir, "amb");
       }
     } catch (e) {
       writeFatalError("AMB_INSTALL_FAILED", `CLI promotion recovery failed: ${e.message}`);
@@ -673,7 +701,7 @@ async function runInstall(depsOverride) {
     if (resolved) {
       const resolvedRealpath = deps.realpath(resolved);
       const existingManagedRealpath = deps.realpath(managedAmb);
-      if (path2.resolve(resolved) !== path2.resolve(managedAmb) && (!resolvedRealpath || !existingManagedRealpath || resolvedRealpath !== existingManagedRealpath)) {
+      if (path3.resolve(resolved) !== path3.resolve(managedAmb) && (!resolvedRealpath || !existingManagedRealpath || resolvedRealpath !== existingManagedRealpath)) {
         writeFatalError("PATH_MISSING", `'amb' on $PATH is not the managed CLI at ${managedAmb}. Put ~/.local/bin before other PATH entries.`);
         return 1;
       }
@@ -687,7 +715,7 @@ async function runInstall(depsOverride) {
         writeFatalError("AMB_INSTALL_FAILED", `CLI bootstrap allocation failed: ${e.message}`);
         return 1;
       }
-      managedAmb = path2.join(stagedCliDir, "amb");
+      managedAmb = path3.join(stagedCliDir, "amb");
       try {
         deps.ensureCliClone({ cliDir: stagedCliDir, branch, repoUrl });
       } catch (e) {
@@ -715,7 +743,7 @@ async function runInstall(depsOverride) {
       writeFatalError("PATH_MISSING", `Cannot locate npm's global bin dir. Run 'npm config get prefix', append /bin, and add it to your $PATH.`);
       return 1;
     }
-    managedAmb = path2.join(npmBin, "amb");
+    managedAmb = path3.join(npmBin, "amb");
   }
   if (mode === "npm") {
     const resolved = deps.resolveAmb();
@@ -736,7 +764,7 @@ async function runInstall(depsOverride) {
       minVersion,
       deps: {
         runVersion: () => {
-          const r = nodeSpawnSync2(managedAmb, ["--version", "--json"], { encoding: "utf8" });
+          const r = runManagedAmbVersion(managedAmb);
           if (r.error) {
             throw new Error(`amb --version spawn failed: ${r.error.message}`);
           }
@@ -791,7 +819,7 @@ async function runInstall(depsOverride) {
     try {
       deps.markCliStateReady(promotion);
       deps.promoteCliTransaction(promotion);
-      managedAmb = path2.join(cliDir, "amb");
+      managedAmb = path3.join(cliDir, "amb");
       deps.ensureSymlink({ src: managedAmb, dst: linkPath });
     } catch (e) {
       writeFatalError("SYMLINK_FAILED", e.message);

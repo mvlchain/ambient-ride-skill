@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 // src/scripts/ride-relay.ts
-import path8 from "path";
+import path9 from "path";
 import fs7 from "fs";
 
 // src/lib/core/state-paths.ts
@@ -354,11 +354,43 @@ function buildSinksFromEnv(env, deps = {}) {
   return sinks;
 }
 
-// src/scripts/_internal/deliver-openclaw.ts
-import { closeSync, existsSync, fstatSync, openSync, readSync, realpathSync } from "fs";
+// src/lib/core/fixed-executable-env.ts
+import { accessSync, constants, statSync } from "fs";
 import path3 from "path";
+function fixedExecutableEnv(name, selected, env = process.env) {
+  const errorCode = name === "amb" ? "AMB_EXECUTABLE_INVALID" : "RELAY_EXECUTABLE_INVALID";
+  const executable = path3.resolve(selected);
+  const directory = path3.dirname(executable);
+  if (path3.basename(executable) !== name || directory.includes(path3.delimiter) || executable.includes("\0")) {
+    throw new Error(`${errorCode}: expected an executable named ${name}`);
+  }
+  if (!statSync(executable).isFile()) throw new Error(`${errorCode}: not a regular file`);
+  accessSync(executable, constants.X_OK);
+  return { ...env, PATH: [directory, ...env.PATH ? [env.PATH] : []].join(path3.delimiter) };
+}
+
+// src/scripts/_internal/deliver-openclaw.ts
+import { accessSync as accessSync2, constants as constants2, closeSync, fstatSync, openSync, readSync, realpathSync, statSync as statSync2 } from "fs";
+import path4 from "path";
 import { execFile, execFileSync } from "child_process";
+
+// src/scripts/_internal/openclaw-command.ts
 var DELIVER_AGENT_TIMEOUT_SECONDS = 180;
+function assertOpenclawArgs(kind, args) {
+  const matches = (shape) => args.length === shape.length && shape.every((value, i) => value === null ? typeof args[i] === "string" && args[i].length > 0 && !args[i].includes("\0") : args[i] === value);
+  let valid = false;
+  if (kind === "query") {
+    valid = matches(["agents", "list", "--json"]) || matches(["sessions", "--json", "--agent", null, "--active", null]) || matches(["sessions", "list", "--json", "--agent", null, "--active", null]);
+  } else if (kind === "agent") {
+    const base = ["agent", "--agent", null, "--session-id", null, "--thinking", "off", "--timeout", String(DELIVER_AGENT_TIMEOUT_SECONDS), "--message", null];
+    valid = matches(base) || matches([...base, "--channel", "last", "--deliver"]);
+  } else {
+    valid = matches(["message", "send", "--channel", null, "--target", null, "-m", null, "--json"]);
+  }
+  if (!valid) throw new Error(`OPENCLAW_RELAY_COMMAND_REJECTED: ${kind}`);
+}
+
+// src/scripts/_internal/deliver-openclaw.ts
 function buildRelayArgs(input) {
   const base = [
     "agent",
@@ -380,21 +412,31 @@ var COMMON_CLI_PATHS = [
   "/opt/homebrew/bin/openclaw",
   "/usr/local/bin/openclaw"
 ];
-function defaultWhich() {
+function isExecutableFile(candidate) {
   try {
-    const out = execFileSync("command", ["-v", "openclaw"], {
-      shell: "/bin/sh",
-      encoding: "utf-8"
-    }).trim();
-    return out.length > 0 ? out : null;
+    if (!statSync2(candidate).isFile()) return false;
+    accessSync2(candidate, constants2.X_OK);
+    return true;
   } catch {
-    return null;
+    return false;
   }
 }
+function defaultWhich() {
+  for (const directory of (process.env.PATH ?? "").split(path4.delimiter)) {
+    const candidate = path4.resolve(directory, "openclaw");
+    if (isExecutableFile(candidate)) return candidate;
+  }
+  return null;
+}
 function resolveOpenclawCli(passed, opts = {}) {
-  const exists = opts.exists ?? existsSync;
+  const exists = opts.exists ?? isExecutableFile;
   const which = opts.which ?? defaultWhich;
-  if (passed && exists(passed)) return passed;
+  if (passed && passed !== "openclaw") {
+    if (path4.basename(passed) !== "openclaw" || !exists(passed)) {
+      throw new Error("OPENCLAW_RELAY_CLI_INVALID: set AMB_RIDE_OPENCLAW_CLI to an executable named openclaw");
+    }
+    return path4.resolve(passed);
+  }
   const found = which();
   if (found) return found;
   for (const p of COMMON_CLI_PATHS) {
@@ -403,19 +445,21 @@ function resolveOpenclawCli(passed, opts = {}) {
   throw new Error("openclaw CLI not found (passed/which/common paths all failed)");
 }
 function defaultRunForString(cli) {
-  try {
-    return execFileSync(cli, ["channels", "list"], {
-      encoding: "utf-8",
-      timeout: 1e4
-    });
-  } catch (e) {
-    return `channels list failed: ${e.message}`;
-  }
+  return execFileSync("openclaw", ["channels", "list"], {
+    env: fixedExecutableEnv("openclaw", cli),
+    encoding: "utf-8",
+    timeout: 1e4,
+    shell: false
+  });
 }
 function detectChannelEnabled(cli, opts = {}) {
   const run = opts.run ?? defaultRunForString;
-  const out = run(cli);
-  return !/no configured chat channels/i.test(out);
+  try {
+    const out = run(cli);
+    return out.trim().length > 0 && !/no configured chat channels/i.test(out);
+  } catch {
+    return false;
+  }
 }
 var CHANNEL_UNDELIVERABLE = [
   /unknown channel/i,
@@ -437,7 +481,8 @@ function defaultOnDegrade(reason) {
 }
 function defaultRun(timeoutMs) {
   return (cli, args) => new Promise((resolve, reject) => {
-    execFile(cli, args, { timeout: timeoutMs, maxBuffer: 4 * 1024 * 1024 }, (err, stdout, stderr) => {
+    assertOpenclawArgs("agent", args);
+    execFile("openclaw", [...args], { shell: false, env: fixedExecutableEnv("openclaw", cli), timeout: timeoutMs, maxBuffer: 4 * 1024 * 1024 }, (err, stdout, stderr) => {
       if (err) {
         const so = (stdout ?? "").toString().slice(0, 2e3);
         const se = (stderr ?? "").toString().slice(0, 2e3);
@@ -552,7 +597,8 @@ function resolveOpenclawAgent(input) {
   });
 }
 function defaultRunForSessions(cli, args) {
-  return execFileSync(cli, args, { encoding: "utf-8", timeout: 1e4 });
+  assertOpenclawArgs("query", args);
+  return execFileSync("openclaw", [...args], { shell: false, env: fixedExecutableEnv("openclaw", cli), encoding: "utf-8", timeout: 1e4 });
 }
 var TRANSCRIPT_TAIL_BYTES = 1024 * 1024;
 var TRANSCRIPT_FLUSH_WAIT_MS = 5e3;
@@ -600,7 +646,7 @@ function formatSessionResolveDiagnostics(diagnostics) {
 }
 function defaultTranscriptHasRideId(storePath, sessionId, rideId) {
   if (!/^[A-Za-z0-9_-]+$/.test(sessionId)) return false;
-  const transcript = path3.join(path3.dirname(storePath), `${sessionId}.jsonl`);
+  const transcript = path4.join(path4.dirname(storePath), `${sessionId}.jsonl`);
   let fd;
   try {
     fd = openSync(transcript, "r");
@@ -823,15 +869,15 @@ function makeResolveFailLogger(errorLogPath, opts) {
 
 // src/scripts/_internal/relay-trace.ts
 import fs3 from "fs";
-import path4 from "path";
+import path5 from "path";
 function relayTracePath(root, rideId) {
-  return path4.join(root, "run", `relay-trace-${rideId}.jsonl`);
+  return path5.join(root, "run", `relay-trace-${rideId}.jsonl`);
 }
 function makeRelayTrace(root, rideId) {
   const file = relayTracePath(root, rideId);
   return (rec) => {
     try {
-      fs3.mkdirSync(path4.dirname(file), { recursive: true });
+      fs3.mkdirSync(path5.dirname(file), { recursive: true });
       fs3.appendFileSync(file, JSON.stringify(rec) + "\n");
     } catch {
     }
@@ -942,7 +988,8 @@ function buildInjectText(ev) {
 }
 function defaultRunSend(cli) {
   return (args) => new Promise((resolve, reject) => {
-    execFile2(cli, args, { timeout: SEND_TIMEOUT_MS, maxBuffer: 1024 * 1024 }, (err, stdout, stderr) => {
+    assertOpenclawArgs("message", args);
+    execFile2("openclaw", [...args], { shell: false, env: fixedExecutableEnv("openclaw", cli), timeout: SEND_TIMEOUT_MS, maxBuffer: 1024 * 1024 }, (err, stdout, stderr) => {
       if (err) {
         reject(new Error(`message send failed: ${err.message}
 ${String(stderr).slice(0, 500)}`));
@@ -1038,7 +1085,7 @@ function makeTracedLegacyDeliver(legacy, trace, now) {
 
 // src/scripts/_internal/relay-loop.ts
 import { spawn as nodeSpawn } from "child_process";
-import path5 from "path";
+import path6 from "path";
 import fs4 from "fs";
 var RelaySpawnError = class extends Error {
   code = "RELAY_CLI_SPAWN_FAILED";
@@ -1059,17 +1106,18 @@ function isPermanentSpawnFailure(e) {
   return e.spawnCode !== void 0 && PERMANENT_SPAWN_CODES.has(e.spawnCode);
 }
 function writeCursorAtomic(file, seq) {
-  fs4.mkdirSync(path5.dirname(file), { recursive: true });
+  fs4.mkdirSync(path6.dirname(file), { recursive: true });
   const tmp = `${file}.tmp.${process.pid}`;
   fs4.writeFileSync(tmp, String(seq));
   fs4.renameSync(tmp, file);
 }
 function runRelayLoop(o) {
   const spawn = o.spawn ?? nodeSpawn;
-  const ambCmd = o.ambCmd ?? "amb";
+  const ambCmd = "amb";
+  if (o.ambCmd !== void 0 && o.ambCmd !== "amb") return Promise.reject(new Error("RELAY_COMMAND_REJECTED"));
   let child;
   try {
-    child = spawn(ambCmd, [
+    child = spawn("amb", [
       "events",
       "--ride",
       o.rideId,
@@ -1077,7 +1125,7 @@ function runRelayLoop(o) {
       o.cursorFile,
       "--follow",
       "--prompt"
-    ], { stdio: ["ignore", "pipe", "inherit"] });
+    ], { shell: false, stdio: ["ignore", "pipe", "inherit"] });
   } catch (err) {
     return Promise.reject(new RelaySpawnError(ambCmd, err));
   }
@@ -1161,9 +1209,9 @@ function runRelayLoop(o) {
 import fs5 from "fs";
 
 // src/lib/events/event-paths.ts
-import path6 from "path";
+import path7 from "path";
 function logPath(root, rideId) {
-  return path6.join(root, "events", `${rideId}.jsonl`);
+  return path7.join(root, "events", `${rideId}.jsonl`);
 }
 
 // src/scripts/_internal/relay-guards.ts
@@ -1222,9 +1270,10 @@ function startRelayGuards(o) {
 }
 
 // src/scripts/_internal/self-detach.ts
-import { spawn as nodeSpawn2 } from "child_process";
+import { fork as nodeFork } from "child_process";
+import { fileURLToPath } from "url";
 import fs6 from "fs";
-import path7 from "path";
+import path8 from "path";
 var DETACH_MARKER = "TADA_RELAY_DETACHED";
 var NO_DETACH_ENV = "TADA_RELAY_NO_DETACH";
 function shouldSelfDetach(env = process.env) {
@@ -1234,22 +1283,27 @@ function shouldSelfDetach(env = process.env) {
   return true;
 }
 function detachSelf(rideId, deps = {}) {
-  const spawn = deps.spawn ?? nodeSpawn2;
+  const fork = deps.fork ?? nodeFork;
   const env = deps.env ?? process.env;
-  const execPath = deps.execPath ?? process.execPath;
-  const argv = deps.argv ?? process.argv.slice(1);
+  const args = deps.args ?? process.argv.slice(2);
   const root = deps.root ?? stateRoot();
   const warn = deps.stderr ?? ((s) => process.stderr.write(s));
-  const logPath2 = path7.join(root, "run", `relay-${rideId}.log`);
+  const logPath2 = path8.join(root, "run", `relay-${rideId}.log`);
   try {
-    fs6.mkdirSync(path7.dirname(logPath2), { recursive: true });
+    fs6.mkdirSync(path8.dirname(logPath2), { recursive: true });
     const fd = fs6.openSync(logPath2, "a");
     try {
-      const child = spawn(execPath, argv, {
+      const child = fork(fileURLToPath(import.meta.url), [...args], {
+        execArgv: [],
         detached: true,
-        stdio: ["ignore", fd, fd],
+        stdio: ["ignore", fd, fd, "ipc"],
         env: { ...env, [DETACH_MARKER]: "1" }
       });
+      child.on("error", (error) => warn(JSON.stringify({
+        note: "RELAY_DETACH_FAILED",
+        message: error.message
+      }) + "\n"));
+      if (child.connected) child.disconnect();
       child.unref();
       const pid = child.pid ?? null;
       warn(JSON.stringify({
@@ -1316,8 +1370,8 @@ function noteTransientSpawnFailure(e) {
 async function runRideRelay(rideId, deps) {
   const kind = selectDeliver();
   if (kind === "stdout") {
-    const cursorFile2 = path8.join(stateRoot(), "cursors", `stdout-${rideId}`);
-    fs7.mkdirSync(path8.dirname(cursorFile2), { recursive: true });
+    const cursorFile2 = path9.join(stateRoot(), "cursors", `stdout-${rideId}`);
+    fs7.mkdirSync(path9.dirname(cursorFile2), { recursive: true });
     try {
       const sinks = buildSinksFromEnv(readRuntimeEnv());
       const deliver2 = sinks.length === 0 ? deliverStdout : makeSinkThenStdoutDeliver(makeCompositeSink(sinks));
@@ -1364,8 +1418,8 @@ async function runRideRelay(rideId, deps) {
     return 1;
   }
   const resolveSession = deps.resolveOpenclawSession ?? resolveOpenclawSession;
-  const errorLogPath = path8.join(stateRoot(), "run", `relay-error-${rideId}.log`);
-  fs7.mkdirSync(path8.dirname(errorLogPath), { recursive: true });
+  const errorLogPath = path9.join(stateRoot(), "run", `relay-error-${rideId}.log`);
+  fs7.mkdirSync(path9.dirname(errorLogPath), { recursive: true });
   const resolveFailLog = makeResolveFailLogger(errorLogPath);
   let pipeline;
   function buildPipeline(resolved) {
@@ -1448,11 +1502,11 @@ async function runRideRelay(rideId, deps) {
     }
     return pipeline.deliver(ev);
   };
-  const lockFile = path8.join(stateRoot(), "run", `relay-${rideId}.pid`);
+  const lockFile = path9.join(stateRoot(), "run", `relay-${rideId}.pid`);
   const unlock = await deps.acquireLock(lockFile);
   if (!unlock) return 0;
-  const cursorFile = path8.join(stateRoot(), "cursors", `openclaw-${rideId}`);
-  fs7.mkdirSync(path8.dirname(cursorFile), { recursive: true });
+  const cursorFile = path9.join(stateRoot(), "cursors", `openclaw-${rideId}`);
+  fs7.mkdirSync(path9.dirname(cursorFile), { recursive: true });
   const backoff = deps.backoffMs ?? DEFAULT_BACKOFF_MS;
   const controller = new AbortController();
   const startGuards = deps.startGuards ?? startRelayGuards;
@@ -1497,13 +1551,13 @@ async function runRideRelay(rideId, deps) {
 }
 function makeAcquireLockAdapter(acquireFn = acquire, releaseFn = release) {
   return async (lockFile) => {
-    if (path8.basename(path8.dirname(lockFile)) !== "run") {
+    if (path9.basename(path9.dirname(lockFile)) !== "run") {
       throw new Error(
         `ride-relay adapter: lockFile must live under <root>/run/, got: ${lockFile}`
       );
     }
-    const root = path8.dirname(path8.dirname(lockFile));
-    const name = path8.basename(lockFile, ".pid");
+    const root = path9.dirname(path9.dirname(lockFile));
+    const name = path9.basename(lockFile, ".pid");
     const ok = acquireFn(root, name);
     if (!ok) return null;
     return () => releaseFn(root, name);

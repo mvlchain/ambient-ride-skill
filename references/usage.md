@@ -17,9 +17,9 @@ This skill lets you interact with **TADA/Throo** (TADA: [tada.global](https://ta
 
 ### Where it works
 
-The underlying app itself operates in a number of cities — **TADA** in New York, Denver, Singapore, Bangkok, Ho Chi Minh, Hanoi, Phnom Penh, Siem Reap, and Hong Kong, and **Throo** currently in New York only.
+The underlying app itself operates in a number of cities — **TADA** in New York, Denver, Singapore, Bangkok, Ho Chi Minh, Hanoi, Phnom Penh, Siem Reap, Sihanoukville, Kampot, and Hong Kong, and **Throo** currently in New York only.
 
-**However, this skill currently supports rides in New York (NYC) and Singapore (SIN) only.** Support for additional cities is rolling out over time.
+**This skill enables a subset of those cities: New York (NYC), Singapore (SIN), and — in Cambodia — Phnom Penh (PNH), Siem Reap (REP), Sihanoukville (SHV), and Kampot (KPK).** A city that is not on this list is not supported here; the skill does not fall back to a nearby city or region. Support for additional cities is rolling out over time.
 
 ### Who's behind it
 
@@ -81,7 +81,7 @@ You can also decide later; that leaves the account unconfigured until you choose
 
 **C4. Deposit collateral into TADA's deposit contract.** Before you are eligible to request rides on this path, you stake collateral — **USDC or MVL token** — into TADA's on-chain deposit contract. This is a one-time on-chain transfer. **It is *not* a prepaid balance that ride fares are deducted from.** Your collateral stays on-chain and can be withdrawn later when you no longer need access. This step requires the collateral itself plus a small amount of the chain's native gas token to pay the deposit transaction fee. Note: whichever token you deposit, your collateral is credited and returned as the **MVL token** — a USDC deposit is converted to an MVL credit, and a withdrawal returns MVL, not USDC.
 
-**C5. Search, request, ride.** The agent resolves both places into TADA "places" via autocomplete + an interactive map session, then queries available cars: how long the wait is, which classes are available, and what each one costs, and books the one you pick. (Origin and destination must currently be inside a city this skill supports — NYC or SIN.)
+**C5. Search, request, ride.** The agent resolves both places into TADA "places" via autocomplete + an interactive map session, then queries available cars: how long the wait is, which classes are available, and what each one costs, and books the one you pick. (Origin and destination must currently be inside a city this skill supports — NYC, SIN, PNH, REP, SHV, or KPK.)
 
 **C6. Pay for the ride with x402 (USDC).** Ride payment is **completely separate from collateral**. After the ride completes, the agent settles the fare using **x402**, an HTTP-native payment protocol where the server tells the client exactly how much to pay and the client pays inline as part of the same request. The fare is paid out of your wallet's USDC balance — it does **not** draw from the deposit contract. Your collateral stays put.
 
@@ -112,7 +112,7 @@ The skill uses [Privy](https://privy.io), an embedded-wallet provider that split
 TADA/Throo is a ride-hailing service — see [tada.global](https://tada.global) (TADA) or [ridethroo.ai](https://ridethroo.ai) (Throo). The skill is a connector that lets an agent book and pay for TADA/Throo rides on your behalf.
 
 **Where can I use TADA/Throo through this skill?**
-The underlying app operates in multiple cities — **TADA** in New York, Denver, Singapore, Bangkok, Ho Chi Minh, Hanoi, Phnom Penh, Siem Reap, and Hong Kong, and **Throo** in New York only — but **this agent skill currently supports only New York (NYC) and Singapore (SIN)**. More cities will be added over time.
+The underlying app operates in multiple cities — **TADA** in New York, Denver, Singapore, Bangkok, Ho Chi Minh, Hanoi, Phnom Penh, Siem Reap, Sihanoukville, Kampot, and Hong Kong, and **Throo** in New York only — but **this agent skill currently enables New York (NYC), Singapore (SIN), Phnom Penh (PNH), Siem Reap (REP), Sihanoukville (SHV), and Kampot (KPK)** (regions `NY`, `SG`, `KH`). Anywhere else is rejected rather than redirected. More cities will be added over time.
 
 **Is this skill official?**
 Yes — it is the official integration shipped by the TADA team.
@@ -202,7 +202,7 @@ This removes data stored by Ambient on this machine. It does not delete telemetr
 Not necessarily — see [What you are authorising](#what-you-are-authorising) above, which covers this in full. Short version: the skill's instructions ask before paying steps, but an agent configured to act autonomously can be allowed to skip them, and only your agent host can make the gate binding.
 
 **Why can't I find rides where I am?**
-Most likely the city is not yet supported by **this skill** — currently only NYC and SIN are wired up. Other possibilities: no driver is currently within range, or your origin/destination did not resolve to a valid TADA place. Try a more specific address or a nearby landmark.
+Most likely the city is not yet supported by **this skill** — currently NYC, SIN, PNH, REP, SHV, and KPK are wired up, and an unsupported city is rejected rather than served from a nearby one. Other possibilities: no driver is currently within range, or your origin/destination did not resolve to a valid TADA place. Try a more specific address or a nearby landmark.
 
 ---
 

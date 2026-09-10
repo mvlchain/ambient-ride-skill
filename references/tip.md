@@ -10,7 +10,7 @@ The tip surface is two commands: `tip-config` (read the region's tip settings) a
 amb tip-config <region>
 ```
 
-- `region`: region code (`SG` = Singapore, `NY` = New York). Infer from the ride / conversation context. (Member mode resolves the active account; crypto uses the registered wallet.)
+- `region`: region code (`SG` = Singapore, `NY` = New York, `KH` = Cambodia). Infer from the ride / conversation context. (Member mode resolves the active account; crypto uses the registered wallet.) A region without tip support returns `enabled: false` — do not offer a tip there.
 - Returns `{ enabled, minAmount, maxAmount?, currency, presets? }`.
   - `presets` is an array of suggested amounts (e.g. NY returns `[2, 3, 5, 10]`).
   - `maxAmount` may be absent when the region has no maximum (e.g. NY has no max; SG has a finite max).
