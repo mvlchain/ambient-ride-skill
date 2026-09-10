@@ -39,7 +39,7 @@ Before running `place_search` to resolve a ride origin or destination, you may a
 amb place-search <wallet_address> <city> <query> [latitude] [longitude] --json
 ```
 
-- `city`: **City code** (e.g. `SIN`, `BKK`) or English city name. Do NOT use region codes (`SG`, `TH`) here — those are for `ride_search` only.
+- `city`: **City code** (e.g. `SIN`, `PNH`) or English city name. Do NOT use region codes (`SG`, `KH`) here — those are for `ride_search` only.
 
 | City code | English name | Region code | Country |
 |-----------|--------------|-------------|---------|
@@ -59,6 +59,8 @@ amb place-search <wallet_address> <city> <query> [latitude] [longitude] --json
 | `NYC` | New York | `NY` | USA |
 
 `place_search` uses **city code**, `ride_search` uses **region code**. Use this table to convert between them.
+
+The table lists every city the TADA app itself serves. **Ambient Ride currently enables only `NYC`, `SIN`, `PNH`, `REP`, `SHV`, and `KPK`** (regions `NY`, `SG`, `KH`). Any other city or region is rejected by the service; the CLI does not fall back to a nearby city or to a default region. A city code from the table that Ambient Ride has not enabled is still forwarded to the service, which then refuses it — so use only the enabled codes above.
 
 - `query`: Search term (place name, address, etc.)
 - `latitude` / `longitude`: Optional. User's current location for bias. Omit if unknown.
@@ -750,11 +752,17 @@ At the applicable commit point above, start ride-relay using the platform's back
 node ${SKILL_DIR}/scripts/ride-relay.js <request_id> [--agent <agent-id>] [--session-key <session-key>] [--session-id <sid>] [--once]
 ```
 
+This is the invocation form for the stdout-passthrough platforms (Claude Code
+Monitor, Hermes, codex/other) that run ride-relay.js directly. **On OpenClaw, do
+not background this `node …/ride-relay.js` form directly** — background the
+`ride-relay.sh` launcher (see the OpenClaw bullet below); a direct background
+launch is exposed to the process-group startup race the launcher's `setsid` closes.
+
 Refer to SKILL.md → "Event streaming: ride-relay" for the correct primitive per platform:
 
 - **Claude Code:** the `Monitor` tool, with ride-relay as its `command` (e.g. `node ${SKILL_DIR}/scripts/ride-relay.js <request_id>`). Monitor runs the command itself and turns each stdout line into a live notification, so every `ride_event` reaches the user as it arrives; the relay self-exits on the terminal `ride_event`, which ends the watch. Do **not** run the relay under a backgrounded `Bash` and try to attach `Monitor` to that shell — `Monitor` streams the stdout of its *own* command, it cannot watch a separate background process.
 - **Hermes:** `terminal(background=true, notify_on_complete=true)` with `--once`; on each `[IMPORTANT: Background process … completed]` notification, parse the status line, report it to the user verbatim, and spawn the next relay (agentic loop) until terminal status. See SKILL.md → "Hermes extra" for the loop and the manual-drain fallback.
-- **OpenClaw:** any background launch works — `exec` with `&` (or `nohup … &`) is fine. ride-relay **detaches itself**: it re-execs into a new session (so the tool call's process-group kill can't reap it), prints a `RELAY_DETACHED` note with the child pid and its log path (`~/.amb/run/relay-<request_id>.log`), and the command you ran exits immediately. Do not wait on it. Pass only `<request_id>`: ride-relay self-resolves its agent from the configured agents/workspace and its session from the unique active transcript containing that ride id. It never guesses the freshest session. `--agent`, `--session-key`, and `--session-id` remain optional compatibility/debug hints and must not be invented. `--once` under OpenClaw is ignored (no-op) — the relay stays long-running. See SKILL.md → "OpenClaw extra" for deterministic resolution + hybrid (channel-aware) delivery behavior.
+- **OpenClaw:** background the **`ride-relay.sh`** launcher — `sh ${SKILL_DIR}/scripts/ride-relay.sh <request_id> &` (or `nohup … &`). The launcher `exec`s the relay under `setsid`, so it lives in its own session from exec time — *before* Node boots — and OpenClaw's process-group kill on tool-call return cannot reap it during startup. It prints a `RELAY_DETACHED` note with the child pid and its log path (`~/.amb/run/relay-<request_id>.log`), and the command you ran exits immediately. Do not wait on it. **Do not** launch `node ${SKILL_DIR}/scripts/ride-relay.js <request_id> &` directly on OpenClaw: ride-relay.js still self-detaches, but only after Node has booted, leaving a startup window where the group-kill can land first and the ride goes silent after booking. Pass only `<request_id>`: ride-relay self-resolves its agent from the configured agents/workspace and its session from the unique active transcript containing that ride id. It never guesses the freshest session. `--agent`, `--session-key`, and `--session-id` remain optional compatibility/debug hints and must not be invented. `--once` under OpenClaw is ignored (no-op) — the relay stays long-running. See SKILL.md → "OpenClaw extra" for deterministic resolution + hybrid (channel-aware) delivery behavior.
 - **Other:** platform's own background primitive; ride-relay runs in stdout passthrough mode.
 
 After starting, tell the user the ride was requested and monitoring is active, then continue handling arriving events.
@@ -982,7 +990,7 @@ Launch with the platform's background primitive (see SKILL.md → "Event streami
 
 10. Cleanup — ride-relay exits on its own when a terminal `ride_event` is reached. If you need to stop it early (e.g. user cancelled and you already handled the terminal event), use the platform's kill primitive (Claude Code `TaskStop` to stop the Monitor, OpenClaw `process kill`).
 
-11. On `FINISHED`, ride-relay prints the completion prompt and offers both a tip and an on-demand receipt. It does not fetch the receipt. On an explicit request, run `amb ride-receipt <request_id>` and surface the live result verbatim. If settlement is pending, ask the user to try again shortly. Only after the user has requested and seen a canonical receipt should you check whether the wallet can still afford the next ride — see SKILL.md → "USDC bridge".
+11. On `FINISHED`, ride-relay prints the completion prompt with an on-demand receipt offer and, only where the region supports tipping, a tip offer. Offer a tip only if the prompt carries one — never invent the offer. It does not fetch the receipt. On an explicit request, run `amb ride-receipt <request_id>` and surface the live result verbatim. If settlement is pending, ask the user to try again shortly. Only after the user has requested and seen a canonical receipt should you check whether the wallet can still afford the next ride — see SKILL.md → "USDC bridge".
 
 ## Error Handling
 

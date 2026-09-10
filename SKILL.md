@@ -1,6 +1,6 @@
 ---
 name: ride
-version: 1.4.0
+version: 1.5.0
 description: Ambient Ride skill for TADA/Throo ride-hailing and taxi service. Wallet, USDC bridge status and recovery, deposit, collateral, ride, payment, chat, and tipping workflows; use it for wallet balances, starting and resuming USDC bridges, and bridge progress.
 metadata:
   openclaw:
@@ -20,7 +20,7 @@ metadata:
         description: Control local runtime log verbosity; operational ride identifiers can appear in debug logs.
       - name: AMB_RIDE_OPENCLAW_CLI
         required: false
-        description: Path to the openclaw CLI used for ride event delivery.
+        description: Path to an executable named openclaw for ride event delivery; custom installation directories and symlinks are supported.
       - name: AMB_RIDE_NOTIFY_WEBHOOK_URL
         required: false
         description: Send rendered ride alarms to a user-configured external webhook.
@@ -106,6 +106,10 @@ include the response's exact current stage, server continuation, literal `status
 Check later with the response's literal `status_command`. If it is still pending, the literal
 `next_step` resumes that same existing job.
 
+**When an existing bridge is `COMPLETED`, report the decimal amount and symbol and both source and destination chains.** If it completed between checks without a user action, say it was already completed by the server relayer; do not take credit for finishing it yourself. If the minted amount is unknown, preserve that uncertainty and the balance-check instruction instead of inventing an amount.
+
+A source-chain balance RPC failure does not reverse a completed destination mint. Report that lookup limitation separately. The destination's current wallet balance is a total, not proof of this transfer's exact credited amount; do not claim that repairing a source-chain RPC reveals the destination mint amount. Preserve an unknown credited amount unless destination-side receipt evidence supplies it.
+
 **A `FAILED` bridge with `funds_mid_flight: true` is also recovery-critical.** Explicitly tell the
 user that their funds are safe and not lost, and copy the product's recovery text verbatim so the
 local status command and support handoff remain actionable. Do not reduce that payload to a generic
@@ -147,16 +151,16 @@ After installation is confirmed, determine onboarding state with `amb whoami` (J
     ```bash
     amb login --no-wait
     ```
-    This returns `{ "status": "auth_required", "approval_url": "…", "qr_image_path": "…" }`. Always show `approval_url` as a markdown hyperlink (for a user already on the phone that has the TADA/Throo app — they can tap it). `qr_image_path` is a local PNG QR encoding the approval URL. **If your channel can attach images (e.g. Telegram), you MUST also send the QR as a real image attachment — sending only the link is not enough.** The scannable QR lets the user approve from the phone that has the TADA/Throo app, which is often not the phone reading the chat.
+    This returns `{ "status": "auth_required", "approval_url": "…", "qr_image_path": "…" }`. Always show `approval_url` as a markdown hyperlink (for a user already on the phone that has the TADA/Throo app — they can tap it). `qr_image_path` is a local PNG QR encoding the approval URL. **If your channel can attach images (e.g. Telegram), you MUST also send the QR as a real image attachment — sending only the link is not enough.** The scannable QR lets the user approve from the phone that has the TADA/Throo app, which is often not the phone reading the chat. **The reverse is equally required: sending only the QR is not enough either — you MUST also surface the `approval_url` as a tappable markdown link in an *actually-sent* message, not merely your closing reply text (on OpenClaw the reply text is not delivered until the turn ends, so a link that lives only there never reaches the user). The simplest way is to put the link in the QR message's own caption (see below); otherwise send it as its own `message send`.** A user reading the chat on the same phone that has the TADA/Throo app cannot scan their own screen — the tappable link is the only path for them, so it is never optional.
 
     The PNG is written under a temporary directory (e.g. `/tmp/tada-login-XXXX/qr.png`) that image-send refuses to attach directly (only files under an allowed directory are permitted), so copy it into an allowed directory first, then send it as a real image attachment to the current chat using your runtime's image-send capability:
     - **On OpenClaw**, copy the PNG into the OpenClaw media directory, then send it with the `message send` CLI:
       ```bash
       mkdir -p "$HOME/.openclaw/media" && cp "<qr_image_path>" "$HOME/.openclaw/media/qr-login.png"
-      openclaw message send --channel <this channel> --account default --target <this chat id> --media "$HOME/.openclaw/media/qr-login.png" --message "Scan to approve login in the TADA/Throo app" --json
+      openclaw message send --channel <this channel> --account default --target <this chat id> --media "$HOME/.openclaw/media/qr-login.png" --message "Scan the QR to approve login in the TADA/Throo app — or tap this link: [Approve login](<approval_url>)" --json
       ```
-      Resolve `<this channel>` (e.g. `telegram`) and `<this chat id>` from the current message context. Use `--message` for the caption; do **not** use `--caption` (no such flag) or `--reply-to` — both make the send fail.
-    - **On other runtimes**, attach the PNG as an image the same way you attach any local image file in this channel, with the caption "Scan to approve login in the TADA/Throo app".
+      Resolve `<this channel>` (e.g. `telegram`) and `<this chat id>` from the current message context, and substitute the real `approval_url` into the caption. Use `--message` for the caption; do **not** use `--caption` (no such flag) or `--reply-to` — both make the send fail. Carrying the link in this caption is what satisfies the "tappable link in an actually-sent message" rule above in a single send — do not drop it.
+    - **On other runtimes**, attach the PNG as an image the same way you attach any local image file in this channel, with the caption "Scan the QR to approve login in the TADA/Throo app — or tap this link: [Approve login](<approval_url>)" (substitute the real `approval_url`).
 
     In a terminal, an ASCII QR is already printed for the user — do not reproduce it. `qr_image_path` may be absent if QR generation failed; in that case the hyperlink alone is fine. The user approves in the TADA/Throo app, which then displays a 4-digit code. Pass that code:
     ```bash
@@ -346,11 +350,20 @@ Start ride-relay in the background once the ride is created and paid:
 
 Member vs crypto argument forms for `ride-search`/`ride-request`/`ride-status`/`ride-cancel` are in `references/ride.md` (`## Ride` → Member mode / Crypto mode). Run `amb whoami` to confirm `mode` before booking.
 
+**KH member payment selection (DHL-30194):** read `references/member-payment.md` before a KH member booking or any request to use ABA account-on-file. Offer credit card or an already-linked ABA account; never silently switch methods. This explicit-source flow uses gateway v2, including v2 for credit cards. The existing unflagged member commands below remain the legacy card-only v1 flow; never mix their search IDs with v2. Crypto is separate and unchanged. TADA Wallet is not supported. Do not claim ABA staging payment has been verified merely because the client supports it.
+
 **Member coupons:** follow `references/ride.md` → **Member coupons** for the canonical sequence. In brief: proactively find a coupon unless the user supplied a code or explicitly declined coupons; let the user choose a bookable product first; evaluate exactly the first **three** `available=true` candidates for that product in gateway order, or all candidates when fewer than three exist; re-quote each candidate and rank the exact quotes by lowest rider-facing price, preserving gateway order for equal prices. Present the winner first and show every successfully evaluated candidate's exact rider-facing price together with its code/title and discount metadata so the rider can choose. This is bounded product-first evaluation, not a global product × coupon minimum. Before `coupon-available`, never describe `available_coupon_count` from `ride-search` as the number of coupons applicable to the selected route/product; only `coupon-available` establishes that set. “Applied” means applied to the quote, not booked. Confirm before `ride-request`, pass the `search_id` from the final re-quote for the coupon the user selected, the selected `product_id`, the exact `coupon_code`, and the quoted `price` as `confirmed_price`; require `na=false`, `discount.applicable=true`, and an exact returned `discount.coupon_code`. A user-supplied code bypasses the three-candidate discovery cap. Requests to apply a coupon automatically, choose the best coupon, or choose the cheapest coupon all use this bounded explicit-code comparison; there is no separate server-side auto-apply path. Never use `campaign_promotion_code`, infer success from HTTP 200, or suggest changing away from card payment.
 
 ```bash
 node ${SKILL_DIR}/scripts/ride-relay.js <request_id> [--agent <agent-id>] [--session-key <session-key>] [--session-id <sid>] [--once]
 ```
+
+This is the invocation form for the flag reference below and for the
+stdout-passthrough platforms (Claude Code Monitor, Hermes, codex/other) that run
+ride-relay.js directly. **On OpenClaw, do not background this `node …/ride-relay.js`
+form directly** — background the `ride-relay.sh` launcher instead (see the OpenClaw
+row and "OpenClaw extra" below). A direct background launch is exposed to the
+process-group startup race the launcher's `setsid` closes.
 
 Flags by platform (see matrix below):
 - **OpenClaw** takes no required identity flag. ride-relay resolves the agent and current session itself. `--agent`, `--session-key`, and `--session-id` remain optional compatibility/debug hints; do not invent them (see OpenClaw extra).
@@ -365,7 +378,7 @@ Flags by platform (see matrix below):
 |----------|------------|-----------------|
 | Claude Code | `CLAUDECODE` | `Monitor` tool running ride-relay as its `command` — each stdout `ride_event` line streams as a live notification; the relay self-exits on the terminal event, ending the watch |
 | Hermes | `HERMES_SESSION_KEY` or `HERMES_HOME` | `terminal(background=true, notify_on_complete=true)` invoking ride-relay with `--once`; spawn the next relay on each completion notification (see Hermes extra) |
-| OpenClaw | `OPENCLAW_SERVICE_MARKER` | any background launch — `exec` with `&` is fine: ride-relay **re-execs itself into its own session** and the command you ran returns at once (it prints a `RELAY_DETACHED` note with the child pid + log path). Pass only the request id; ride-relay resolves its agent id and live session itself (see OpenClaw extra) |
+| OpenClaw | `OPENCLAW_SERVICE_MARKER` | background the **`ride-relay.sh`** launcher with `&` — it starts the relay in its own session (`setsid`) *before* Node boots, so OpenClaw's process-group teardown on tool-call return cannot kill it during startup; the command returns at once (printing a `RELAY_DETACHED` note with the child pid + log path). Pass only the request id; ride-relay resolves its agent id and live session itself (see OpenClaw extra) |
 | codex / other | (unknown) | platform's own background primitive |
 
 Common to all platforms: ride-relay self-exits when its work is done — by default (Claude Code / codex / OpenClaw) on a terminal `ride_event`; with `--once` (Hermes) after the first non-empty batch of events, terminal or not. The detached (OpenClaw) relay also self-exits if the ride monitor is gone and no event has arrived for 15 minutes, or after 4 hours in any case — so a stuck relay never lingers.
@@ -384,14 +397,19 @@ Common to all platforms: ride-relay self-exits when its work is done — by defa
    Each stdout `ride_event` line then arrives as its own notification; the relay self-exits on the terminal event.
 3. **Do not** fall back to a plain background `Bash` command for monitoring. A background `Bash` notifies only when the **process exits**, not per event line — intermediate status updates would never reach the user.
 4. **Completion guard:** report the ride complete **only** when you have actually seen a terminal event line (`… the ride completed successfully` / `… reached terminal status FINISHED` / a cancel). A relay/monitor process merely *exiting* is **not** proof the ride finished — never infer completion from "background process completed". If the process ended without a terminal line, treat it as a dropped stream, not a finished ride.
-5. On `FINISHED`, ride-relay outputs the completion prompt with optional tip and receipt offers. It does not fetch the receipt. **Only when the user explicitly asks**, run `amb ride-receipt <request_id>` and surface stdout verbatim. Never reconstruct, translate, summarize, or reformat it.
+5. On `FINISHED`, ride-relay outputs the completion prompt with a receipt offer and, only where the region supports tipping, a tip offer. Offer a tip only if the prompt carries one. It does not fetch the receipt. **Only when the user explicitly asks**, run `amb ride-receipt <request_id>` and surface stdout verbatim. Never reconstruct, translate, summarize, or reformat it.
 
-**OpenClaw extra:** spawn ride-relay with the request id only:
+**OpenClaw extra:** spawn ride-relay through the `ride-relay.sh` launcher, with the request id only:
 
-1. Run:
+1. Run (background it however you like — `&` is enough; the launcher returns at once):
    ```bash
-   node ${SKILL_DIR}/scripts/ride-relay.js <request_id>
+   sh ${SKILL_DIR}/scripts/ride-relay.sh <request_id>
    ```
+   The `.sh` launcher `exec`s the relay under `setsid` so it lives in its own
+   session from the start — OpenClaw's group-kill on tool-call return cannot
+   reach it. (Running `node …/ride-relay.js` directly still self-detaches, but
+   only after Node has booted, leaving a startup window where the group-kill can
+   land first; the launcher removes that window.)
 2. ride-relay resolves its agent id via `openclaw agents list --json` (the sole configured agent, or the unique agent whose real workspace matches the inherited current directory). It lists that agent's active sessions and finds the unique transcript containing this ride request id. Missing or ambiguous correlation fails loudly; it never guesses the most recently updated session.
 
 `--agent`, `--session-key`, and `--session-id` are retained for compatibility and debugging. If supplied, they are validated against deterministic resolution; a stale or fabricated hint may be corrected only when the transcript/workspace result is unique, while a conflict between two valid identities fails closed. Normal agent behavior must not call `session_status` or invent identity flags for ride-relay.
@@ -416,7 +434,7 @@ Either way the LLM sees `ride_status` events as user-turn messages inside the se
    ```
    Reply briefly to the user ("monitoring ride status…") and end the turn.
 
-2. When a turn opens with a `[IMPORTANT: Background process … completed. Output: …]` notification, parse the embedded `TADA ride … status …` line (or `… reached terminal status …` for terminal events) and **report that status line to the user verbatim** — do not paraphrase, the exact wording is part of the ride record. On `FINISHED`, offer both a tip and an on-demand receipt, but do not show or fetch the receipt body unless the user asks. Then:
+2. When a turn opens with a `[IMPORTANT: Background process … completed. Output: …]` notification, parse the embedded `TADA ride … status …` line (or `… reached terminal status …` for terminal events) and **report that status line to the user verbatim** — do not paraphrase, the exact wording is part of the ride record. On `FINISHED`, offer an on-demand receipt, and offer a tip **only when the relayed line itself carries a tip amount** — some regions have no tip support, and their completion line has none. Never invent a tip offer. Do not show or fetch the receipt body unless the user asks. Then:
    - **non-terminal status** → spawn another ride-relay with the same options.
    - **terminal status** (`reached terminal status FINISHED` / `USER_CANCELED*` / `DRIVER_CANCELED*` etc.) → stop the loop, do NOT spawn another relay.
 
@@ -497,6 +515,8 @@ For the full command signatures, field reference, and resolve→ride flow, see `
 Crypto-mode rides settle in **Base USDC only**, so a user holding USDC on Ethereum can be unable to pay. Two paths move it, and they are not interchangeable.
 
 **When the user asks where an existing bridge transfer stands, first run `amb bridge-usdc-status <wallet_address>`.** This is a read-only local-state check and is the authoritative source for the skill's locally tracked bridge jobs. Never substitute Etherscan, BaseScan, or another public explorer: chain history cannot reconstruct the local job state, relay progress, or recovery contract.
+
+**A status/check-only request is not permission to resume a bridge.** Report the observed state and the safe next action without running `bridge-usdc`, even if status output supplies a resume command. A resume hint is an available recovery path, not an instruction to execute during a status check. Resume only when the user asks to resume/continue, or when an already-authorized ride workflow requires finishing its pending bridge. Do not turn “check again” into a mutation.
 
 For `BURN_SUBMITTED`, describe the source burn only as submitted, never complete or confirmed. Do not paraphrase it as `burn done`, `burn confirmed`, or `one step is done`; the whole bridge remains in progress until `COMPLETED`. Keep stage completion distinct from transfer completion even when the response also names the remaining attestation and mint steps.
 
