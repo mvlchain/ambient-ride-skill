@@ -98,17 +98,11 @@ may be asynchronous. The CLI blocks repeat submissions after an attempt; never
 work around that guard. Inspect ride status for settlement, or report unresolved
 status for operator review. A transport error does not prove no charge occurred.
 
-## Validation boundary
-
-The API contract comes from development Swagger, not inferred v1 fields.
-Unit/mock contracts are not live gateway evidence. AOF staging happy-path
-verification is waived per the project discussion; record it as **not run**, not
-passed. v2 credit-card regression and possible negative cases still need evidence.
+## Route selection safety
 
 The CLI derives the route group from `car_type` using the server's shared
 `CarGroup.fromCarType` mapping and echoes the matching route distance in km.
 Multiple route groups are supported. If routing data is present but the matching
 group is missing, creation fails closed. Do not substitute another route manually.
 When routes are empty, the optional distance is omitted; the base-ride server
-computes its distance from its own route. See `docs/MIP-4570-aof-progress.md`
-for the source-inspection evidence.
+computes its distance from its own route.
