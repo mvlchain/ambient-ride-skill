@@ -39,7 +39,7 @@ Before running `place_search` to resolve a ride origin or destination, you may a
 amb place-search <wallet_address> <city> <query> [latitude] [longitude] --json
 ```
 
-- `city`: **City code** (e.g. `SIN`, `PNH`) or English city name. Do NOT use region codes (`SG`, `KH`) here — those are for `ride_search` only.
+- `city`: **City code** (e.g. `SIN`, `PNH`, `HKG`) or English city name. Do NOT use region codes (`SG`, `KH`, `HK`) here — those are for `ride_search` only.
 
 | City code | English name | Region code | Country |
 |-----------|--------------|-------------|---------|
@@ -60,7 +60,7 @@ amb place-search <wallet_address> <city> <query> [latitude] [longitude] --json
 
 `place_search` uses **city code**, `ride_search` uses **region code**. Use this table to convert between them.
 
-The table lists every city the TADA app itself serves. **Ambient Ride currently enables only `NYC`, `SIN`, `PNH`, `REP`, `SHV`, and `KPK`** (regions `NY`, `SG`, `KH`). Any other city or region is rejected by the service; the CLI does not fall back to a nearby city or to a default region. A city code from the table that Ambient Ride has not enabled is still forwarded to the service, which then refuses it — so use only the enabled codes above.
+The table lists every city the TADA app itself serves. **Ambient Ride currently enables only `NYC`, `SIN`, `PNH`, `REP`, `SHV`, `KPK`, and `HKG`** (regions `NY`, `SG`, `KH`, `HK`). Any other city or region is rejected by the service; the CLI does not fall back to a nearby city or to a default region. A city code from the table that Ambient Ride has not enabled is still forwarded to the service, which then refuses it — so use only the enabled codes above.
 
 - `query`: Search term (place name, address, etc.)
 - `latitude` / `longitude`: Optional. User's current location for bias. Omit if unknown.
@@ -435,7 +435,7 @@ Card register, delete, and set-default operations are not exposed by the CLI —
 amb ride-search <wallet_address> <region> <origin_lat> <origin_lng> <dest_lat> <dest_lng>
 ```
 
-- `region`: Service region code (e.g. `SG`, `NY`)
+- `region`: Service region code (`SG`, `NY`, `KH`, or `HK`)
 
 Searches available ride products for the given origin/destination coordinates.
 The `search_id` (checkSum) from the result is cached in DB for 3 minutes.
@@ -510,7 +510,7 @@ amb place-airports <city> [--lang TAG] --json
 amb place-reverse-geocode <lat> <lng> <region> [--lang TAG] --json
 ```
 
-- `region`: Two-letter region code. Currently supported: **`NY`**, **`SG`**. Any other value returns an error — there is no fallback.
+- `region`: Two-letter region code. Currently supported: **`NY`**, **`SG`**, **`KH`**, **`HK`**. Any other value returns an error — there is no fallback.
 - `city`: TADA city code (e.g. `NYC`), not free text. Used by `place-airports` (required) and `place-detail` (optional hint).
 - `originLat` / `originLng`: Optional bias point for `place-search` — pass the user's current coordinates when known.
 - `limit` (place-nearby): Optional integer cap on results.
@@ -734,6 +734,13 @@ Pass the `typed_data` JSON from step 1 as the message argument. Returns `{ walle
 amb ride-pay-confirm <request_id> <signature>
 ```
 Pass the `wallet_signature` from step 2. Returns `{ success, tx_hash }`.
+
+If `ride-request` returns `POLICY_EXCEEDED` before creation, follow the
+[spend-policy approval flow](spend-policy.md#basic-ride-flow): choose once/raise, issue a link
+with the original ride JSON, poll, and retry creation with `approval_id`. Keep the same trip
+when refreshing an expired search. Once created, preserve that request ID for payment.
+If payment preparation or confirmation later reports a limit blocker, explain it and stop.
+Do not issue a new creation-time approval or create a replacement ride automatically.
 
 ## ride-relay (event streaming)
 
@@ -1003,6 +1010,10 @@ When a command fails, take the following action based on the error code:
 | `PHONE_NOT_VERIFIED` | Run `amb phone-verify-start` + `amb phone-verify-confirm` |
 | `INSUFFICIENT_DEPOSIT` | Run `amb deposit-status` for the shortfall, then `amb deposit-add <wallet> <network> <token> <amount>`. **`deposit-add` spends Base USDC too** — if `amb wallet-balance` shows too little USDC on the payment chain and a positive USDC row on the bridge source chain, bridge first (SKILL.md → "USDC bridge"), then deposit, then request the ride. `requiredToActivate[].tokenWei` is **raw** (USDC has 6 decimals: `"4000000"` is 4.00 USDC) — convert before passing it anywhere that takes decimal, such as `bridge-usdc`. It is the amount `deposit-add` will **spend**, so the amount to *bridge* is that minus what the wallet already holds on the payment chain: `max(0, amount - payment-chain USDC)`. Note the MVL entry is a different currency — do not bridge against it. When `requiredToActivate` is `null`, do not guess an amount: report `requiredToActivateReason` instead. |
 | `INSUFFICIENT_BALANCE` | Run `amb wallet-balance`. If the bridge source chain's USDC row has funds, the wallet can be topped up from Ethereum — see SKILL.md → "USDC bridge". If that chain has no rows at all, this build has no bridge and that is not the problem. Once the bridge lands, retry the payment or tip that failed. |
+| `POLICY_EXCEEDED` | Stop, read `amb policy`, and name the blocking per-ride / rolling 24-hour / 7-day / 30-day limit with current cap and attempted amount (plus spent/remaining for periods). Offer one-time ride approval, a link-approved policy raise, or stop; see the [spend policy flow](spend-policy.md#basic-ride-flow). Before creation, choose before issuing the link, poll, and retry the same trip with approval_id. For a payment-stage failure on an existing request, report the remaining blocker and stop. This flow also applies when the code is nested inside a generic booking/payment error; never automatically raise limits or switch payment paths. |
+| `POLICY_UNAVAILABLE` | The server could not check the spend policy. Payment is blocked; follow existing payment recovery rules. |
 | `RIDE_REQUEST_FAILED` | Run both `amb deposit-status` and `amb wallet-balance` to identify the cause |
+| `RIDE_CREATE_OUTCOME_UNKNOWN` | Member mode `ride-request` (v1 card flow or v2 `payment_method` flow): the create was sent but its result is unknown, so a ride may exist. Do not rebook; run the returned `inspect_command` (`amb ride-current <region>`) and track any ride it shows |
+| `NETWORK_ERROR` | The gateway in `host` was unreachable or did not answer (`cause`, e.g. `ECONNREFUSED` or `TIMEOUT`). Not an expired session; do not ask the user to log in again. For read/lookup commands (search, status, place, coupon, tip-config), retry when the network recovers. On a payment (`ride-pay`), tip (`tip`) or cancel (`ride-cancel`) the server may already have processed the request — always possible when `cause` is `TIMEOUT`: re-check the ride with `amb ride-current <region>` / `amb ride-status <request_id>` before any retry, and never blind-retry |
 
 For unknown errors in wallet mode during a crypto ride, run `amb setup-check <wallet_address>` to check crypto readiness. Never use it as general recovery for member mode or `mode: null`; inspect member authentication and the failing command instead.

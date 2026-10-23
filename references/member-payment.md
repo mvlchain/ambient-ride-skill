@@ -9,7 +9,9 @@ rides remain out of scope.
 ## Choose a source and search
 
 Check `amb whoami` first. KH supports both methods, subject to server eligibility.
-Ask which method the user wants; do not change a previously selected method.
+HK (Hong Kong), like NY and SG, supports `CREDITCARD` only: the CLI rejects
+`ABA_AOF` outside KH before any payment call, so never offer an ABA account
+there. Ask which method the user wants; do not change a previously selected method.
 Account discovery is `amb aba-accounts --json`; never choose an expired account.
 An upstream `PAYMENT_API_ERROR` means lookup failed, not that the account list is empty.
 
@@ -26,7 +28,10 @@ quote. Ask the user to select one and rerun with its exact ID:
 amb ride-search <oLat> <oLng> <dLat> <dLng> <payment_item_uuid> --region KH --payment-method ABA_AOF --json
 ```
 
-For a card, substitute `CREDITCARD`. Explicit-method searches always use v2,
+For a card, substitute `CREDITCARD`. In HK, use the same command with
+`--region HK --payment-method CREDITCARD`, and pass `"region":"HK"` in the
+JSON commands below. HK routes through the same gateway as SG; the CLI keeps
+`HK` as the ride's region. Explicit-method searches always use v2,
 including credit cards. Unflagged commands remain v1 card-only compatibility.
 Never switch API versions within a search-to-create flow.
 
@@ -65,6 +70,17 @@ and actual latest quote. With a coupon, include the same `coupon_code`.
 The CLI checks current ongoing/unpaid slots before creation, echoes server
 quote fields, and consumes the quote before submitting once. Do not retry an
 ambiguous create. Use `amb ride-current KH --json` to inspect existing rides.
+`RIDE_CREATE_OUTCOME_UNKNOWN` means the create was sent but no definite answer
+came back (5xx, 408/429, `ride_creation_in_progress`, network failure or
+timeout), so a ride may exist. Run
+its `inspect_command` first and track any ride it shows; search again only
+after it shows no new ride. `NETWORK_ERROR` (with `cause` and `host`) before
+submission means the gateway was unreachable and nothing was created; it is
+not an expired session, so do not ask the user to log in again. Lookups may be
+retried once the network recovers, but a `NETWORK_ERROR` from `ride-pay` or
+`tip` (always when `cause` is `TIMEOUT`) may follow a request the server already
+processed: re-check `amb ride-current KH --json` / `amb ride-status <request_id>`
+before any retry, never blind-retry.
 An expired quote or `PRICE_NOT_MATCHED` requires a fresh search and confirmation.
 Never reuse a card quote for an ABA account.
 
