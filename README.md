@@ -4,7 +4,7 @@
 
 Not a simulation. Not a demo network. A real driver, in a real car, pulling up to your curb, booked and paid for by your agent while you finish your coffee.
 
-**Ambient Hailing** is an open-source skill that connects AI agents to live ride-hailing fleets: **Throo in New York**, **TADA in Singapore**, and **TADA in Cambodia** (Phnom Penh, Siem Reap, Sihanoukville, Kampot). Install it in Claude Code or OpenClaw, and your agent can search rides, compare fares, book, pay, chat with your driver, and tip, with your explicit approval at every step that matters.
+**Ambient Hailing** is an open-source skill that connects AI agents to live ride-hailing fleets: **Throo in New York**, **TADA in Singapore**, **TADA in Cambodia** (Phnom Penh, Siem Reap, Sihanoukville, Kampot), and **TADA in Hong Kong**. Install it in Claude Code or OpenClaw, and your agent can search rides, compare fares, book, pay, chat with your driver, and tip, with your explicit approval at every step that matters.
 
 ```
 You:    "Get me to JFK by 3pm."
@@ -326,6 +326,7 @@ The defaults work without any env vars. Only override in special cases.
 | `AMB_RIDE_RPC_URL_<NETWORK>` | build default | Per-network RPC override (for example, `AMB_RIDE_RPC_URL_BASE_SEPOLIA`). |
 | `AMB_TELEMETRY_SERVICE_URL` | baked build URL | Development-only proxy override for telemetry E2E/local service checks. Staging and production reject a different endpoint. |
 | `AMB_RIDE_NOTIFY_WEBHOOK_URL` | (unset) | Optional webhook for out-of-band ride alarms; ride-relay POSTs each alarm as JSON. See `SKILL.md` → "Out-of-band ride alarms" for webhook secret and Telegram configuration. |
+| `AMB_RIDE_NOTIFICATION_V2_ENABLED` | `false` | Internal rollout gate for the route-aware notification foundation. Keep disabled until the notification redesign activation release. |
 
 ## Repository layout
 

@@ -1,6 +1,6 @@
 ---
 name: ride
-version: 1.5.0
+version: 1.6.0
 description: Ambient Ride skill for TADA/Throo ride-hailing and taxi service. Wallet, USDC bridge status and recovery, deposit, collateral, ride, payment, chat, and tipping workflows; use it for wallet balances, starting and resuming USDC bridges, and bridge progress.
 metadata:
   openclaw:
@@ -77,6 +77,21 @@ Skill for the TADA/Throo ride-hailing service.
 - Ride search, booking, payment
 - Real-time driver chat
 - Driver tipping
+- Crypto ride spend-policy limits and remaining budgets (`amb policy`; see `references/spend-policy.md`)
+
+## Crypto spend policy
+
+The server owns crypto ride/tip limits. Use `amb policy --wallet <selected-wallet>` to show current limits and remaining budgets. The server checks limits before creating a crypto RideRequest and again during payment. Member/card rides are outside this policy.
+
+**After a `POLICY_EXCEEDED` error before ride creation:**
+
+1. Read `references/spend-policy.md` and refresh the selected wallet's policy. Explain every blocking axis and the observed cap, fare and rolling spent/remaining values.
+2. Ask whether to **approve only this ride**, **raise limits**, or **stop**. Keep the original ride JSON; no RideRequest exists yet. Do not issue a link before the choice.
+3. For one-time approval, use `approval-request '<ride_json>' once`. For a raise, issue `approval-request '<ride_json>' raise` using the same signed search quote. Explain the returned proposal: rolling spend + twice this fare for exceeded limits, with other limits unchanged. The user edits the amounts within the displayed minimum/maximum and approves on the link. Pass amount flags only when the user already specified values. Both choices require link approval; do not substitute `policy set` for the raise link.
+4. Present the link and use `approval-wait APPROVAL_ID WALLET`. Direct human approval is the default; user-authorized agent assistance is allowed. Approval is not implied by the original ride request.
+5. After `APPROVED` or `APPLIED`, retry `ride-request` with the same trip and the returned `approval_id`. If the local search cache is missing or expired (3 minutes), `ride-request` searches the same trip once and keeps that approval. Show the returned current fare before payment when `quote_refreshed` is true. If the refreshed fare still exceeds raised limits, explain the blocker and wait for the user; do not request another approval automatically. After creation, use the returned request ID for existing payment preparation and signing. Stop on cancellation/expiry. Do not create replacement requests or add payment retries on ambiguous settlement.
+
+One-time approval leaves the existing policy unchanged. A confirmed policy raise affects future requests too. Tips keep their existing policy-management flow and cannot use a ride approval. Follow the reference for unavailable policy reads and remaining blockers. If a limit fails after a RideRequest already exists, report it and stop; do not issue another creation-time approval.
 
 ## Guardrails
 
@@ -350,7 +365,7 @@ Start ride-relay in the background once the ride is created and paid:
 
 Member vs crypto argument forms for `ride-search`/`ride-request`/`ride-status`/`ride-cancel` are in `references/ride.md` (`## Ride` → Member mode / Crypto mode). Run `amb whoami` to confirm `mode` before booking.
 
-**KH member payment selection (DHL-30194):** read `references/member-payment.md` before a KH member booking or any request to use ABA account-on-file. Offer credit card or an already-linked ABA account; never silently switch methods. This explicit-source flow uses gateway v2, including v2 for credit cards. The existing unflagged member commands below remain the legacy card-only v1 flow; never mix their search IDs with v2. Crypto is separate and unchanged. TADA Wallet is not supported. Do not claim ABA staging payment has been verified merely because the client supports it.
+**Explicit member payment selection (DHL-30194):** read `references/member-payment.md` before a KH member booking, any request to use ABA account-on-file, or an explicit-method (`--payment-method`) member booking in another region. In KH, offer credit card or an already-linked ABA account; never silently switch methods. Elsewhere (NY, SG, HK) members pay by credit card only — an HK member may use either the unflagged card flow below or the v2 flow with `--region HK --payment-method CREDITCARD`. ABA_AOF is KH-only; never offer it outside KH. This explicit-source flow uses gateway v2, including v2 for credit cards. The existing unflagged member commands below remain the legacy card-only v1 flow; never mix their search IDs with v2. Crypto is separate and unchanged. TADA Wallet is not supported. Do not claim ABA staging payment has been verified merely because the client supports it.
 
 **Member coupons:** follow `references/ride.md` → **Member coupons** for the canonical sequence. In brief: proactively find a coupon unless the user supplied a code or explicitly declined coupons; let the user choose a bookable product first; evaluate exactly the first **three** `available=true` candidates for that product in gateway order, or all candidates when fewer than three exist; re-quote each candidate and rank the exact quotes by lowest rider-facing price, preserving gateway order for equal prices. Present the winner first and show every successfully evaluated candidate's exact rider-facing price together with its code/title and discount metadata so the rider can choose. This is bounded product-first evaluation, not a global product × coupon minimum. Before `coupon-available`, never describe `available_coupon_count` from `ride-search` as the number of coupons applicable to the selected route/product; only `coupon-available` establishes that set. “Applied” means applied to the quote, not booked. Confirm before `ride-request`, pass the `search_id` from the final re-quote for the coupon the user selected, the selected `product_id`, the exact `coupon_code`, and the quoted `price` as `confirmed_price`; require `na=false`, `discount.applicable=true`, and an exact returned `discount.coupon_code`. A user-supplied code bypasses the three-candidate discovery cap. Requests to apply a coupon automatically, choose the best coupon, or choose the cheapest coupon all use this bounded explicit-code comparison; there is no separate server-side auto-apply path. Never use `campaign_promotion_code`, infer success from HTTP 200, or suggest changing away from card payment.
 
@@ -504,7 +519,7 @@ When the active mode is `tada` (TADA/Throo member) and the user names a place, a
 - **Airport / terminal** → `amb place-airports <city> --json` (e.g. `amb place-airports NYC`).
 - **Coordinates only** → `amb place-reverse-geocode <lat> <lng> <region> --json` to convert to a named place.
 
-Region whitelist is currently **NY** and **SG**; any other value returns an error.
+Region whitelist is currently **NY**, **SG**, **KH**, and **HK**; any other value returns an error.
 
 After resolving: copy `place_id`, `lat_lng.{latitude,longitude}`, `name`, and `address` verbatim into the ride `LocationRequest` — never fabricate or alter these values. For airports/terminals with `sub_places`, ask the user to pick the Pickup (`allowance_type 1`) or Dropoff (`allowance_type 2`) sub-point and book using `sub_place_id` + that sub_place's coordinates.
 
